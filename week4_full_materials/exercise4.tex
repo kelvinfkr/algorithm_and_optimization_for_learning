@@ -294,10 +294,10 @@ Transformer推理时，一个注意力头的计算为 $((QK^\top)V)W_O$，
     \begin{center}
     \begin{tabular}{c|ccc|ccc|ccc}
     \toprule
-    步骤 & \multicolumn{3}{c|}{第1步} & \multicolumn{3}{c|}{第2步（上步选A）} & \multicolumn{3}{c}{第3步（前两步AA）} \\
+    步骤 & \multicolumn{3}{c|}{第1步} & \multicolumn{3}{c|}{第2步（上步选A）} & \multicolumn{3}{c}{第3步（前两步AB）} \\
     \midrule
     Token & A & B & C & A & B & C & A & B & C \\
-    概率   & 0.5 & 0.3 & 0.2 & 0.1 & 0.8 & 0.1 & 0.9 & 0.05 & 0.05 \\
+    概率   & 0.5 & 0.3 & 0.2 & 0.1 & 0.8 & 0.1 & 0.35 & 0.33 & 0.32 \\
     \midrule
     & \multicolumn{3}{c|}{} & \multicolumn{3}{c|}{第2步（上步选B）} & \multicolumn{3}{c}{第3步（前两步BA）} \\
     \midrule

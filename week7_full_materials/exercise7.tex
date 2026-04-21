@@ -1,0 +1,227 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[UTF8, fontset=none]{ctex}
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usepackage{tcolorbox}
+\tcbuselibrary{breakable}
+
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\newtcolorbox{hintbox}{colback=green!3, colframe=green!40!black, breakable, left=6pt, right=6pt, top=4pt, bottom=4pt, title=提示}
+\newtcolorbox{thinkbox}{colback=orange!4, colframe=orange!60!black, breakable, left=6pt, right=6pt, top=4pt, bottom=4pt, title=思考}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\title{\LARGE 第7讲习题 \\[6pt] \large 从范数约束看优化器：SGD $\to$ Muon}
+\date{}
+
+\begin{document}
+\maketitle
+
+\textbf{说明}：本习题紧扣第7讲的五条主线——梯度/Hessian 的 Kronecker 结构、$\ell_2$ 范数下的 GD/牛顿/动量、$\ell_\infty$ 范数下的 SignGD 与权重衰减、谱范数下的 $UV^\top$ 与 Shampoo 恒等式、RMS$\to$RMS 范数下的 Muon/Newton–Schulz。所有数值题都可手算完成，建议先算干净再想物理意义。
+
+\vspace{6pt}
+
+%=======================================================================
+\section*{题 1：梯度的秩1结构与 Hessian 的 Kronecker 积（§1）}
+
+考虑一个 2 输出、2 输入的 ReLU 层
+\[
+h = W x, \qquad z = \mathrm{ReLU}(h), \qquad L = \tfrac{1}{2}\|z - y\|^2.
+\]
+取
+\[
+W = \begin{pmatrix} 1 & 1 \\ 1 & -1 \end{pmatrix},\qquad x = \begin{pmatrix} 2 \\ 1 \end{pmatrix},\qquad y = \begin{pmatrix} 1 \\ 0 \end{pmatrix}.
+\]
+
+\textbf{(a)} 计算 $h$、$z$、$\delta = \partial L/\partial h$，写出 $\nabla_W L = \delta x^\top$。验证它是秩 1 外积。
+
+\textbf{(b)} 用讲义给出的公式 $H = (xx^\top) \otimes H_h$ 写出完整 Hessian $H \in \mathbb{R}^{4 \times 4}$（对 $\mathrm{vec}(W)$）。给出它的秩并说明理由。
+
+\textbf{(c)} 把 $W$ 的第二行改成 $(-1, -1)$（其他不变）。重新计算 $h$，指出哪个神经元变为不活跃，$D_{\sigma'}$ 长什么样，$H_h$ 的秩从多少变到多少，整个 $H$ 的秩变成多少。
+
+\textbf{(d)}（思考）mini-batch 大小 $B = 32$、$\min(m, d) = 768$ 时，full-batch 梯度的秩上界是多少？这对诱导范数约束下的最优更新 $UV^\top$ 意味着什么？（提示：$UV^\top$ 的秩 $= \mathrm{rank}(G)$。）
+
+%=======================================================================
+\section*{题 2：GD、牛顿、Heavy Ball 在新起点上的对比（§2–§3）}
+
+仍用讲义贯穿全文的线性回归例子：
+\[
+X = \begin{pmatrix} 2 & 1 \\ 0 & 1 \\ 1 & 0 \end{pmatrix},\quad y = \begin{pmatrix} 5 \\ 1 \\ 2 \end{pmatrix},\quad H = X^\top X = \begin{pmatrix} 5 & 2 \\ 2 & 2 \end{pmatrix},\quad w^* = \begin{pmatrix} 2 \\ 1 \end{pmatrix}.
+\]
+特征值 $\lambda_1 = 6,\ \lambda_2 = 1,\ \kappa = 6$。但\textbf{换一个初始点}：$w_0 = (5,\ -1)$。
+
+\textbf{(a)} 算梯度 $g_0 = H(w_0 - w^*)$。写出 GD 方向 $-g_0/\|g_0\|_2$ 与 Newton 方向 $-H^{-1} g_0$（用讲义中给的 $H^{-1} = \tfrac{1}{6}\begin{pmatrix}2&-2\\-2&5\end{pmatrix}$），验证牛顿一步就收敛到 $w^*$。
+
+\textbf{(b)} 取最优 GD 学习率 $\eta^* = 2/(\lambda_1 + \lambda_2) = 2/7$，计算 $w_1 = w_0 - \eta^* g_0$ 并给出 $\|w_1 - w^*\|_2/\|w_0 - w^*\|_2$。它应当 $\le 5/7$（$(\kappa{-}1)/(\kappa{+}1)$）。
+
+\textbf{(c)} Heavy Ball：讲义证明最优 $\sqrt{\mu^*} = (\sqrt\kappa - 1)/(\sqrt\kappa + 1)$。对 $\kappa = 6$ 写出 $\mu^*$ 的精确值（保留 $\sqrt 6$），并给出对应的 $\eta^* = (1 + \sqrt{\mu^*})^2/\lambda_{\max}$。
+
+\textbf{(d)} 换 $\mu = 0.5$（明显过大）。对两个方向分别判断落在实数根还是复数根区域，给出衰减率。结论：$\mu$ 取大了收敛率为什么反而接近 GD？
+
+\begin{hintbox}
+复数根判据：$a_i^2 < 4\mu$，其中 $a_i = 1 + \mu - \eta\lambda_i$。在复数根区域 $|z_\pm| = \sqrt\mu$。
+\end{hintbox}
+
+%=======================================================================
+\section*{题 3：$\ell_\infty$ 范数、SignGD 与 AdamW 的平衡点（§4–§5）}
+
+仍用讲义的运行例子，$w_0 = (-1, 3)$，$g_0 = (-11, -2)$。
+
+\textbf{(a)} 写出三个方向的更新（单位化，便于比较方向）：GD 方向、SignGD 方向、Newton 方向。分别计算每个方向与最优方向 $w^* - w_0 = (3, -2)$ 的夹角（用 $\cos\theta$ 给数值）。
+
+\textbf{(b)} SignGD 的更新 $\Delta w = -\eta(\mathrm{sign}(g_1), \mathrm{sign}(g_2))$。在本题中 $g_1, g_2$ 符号相同，SignGD 方向与 $\ell_2$ 方向的差距有多大？\textbf{设计一个反例}：构造一个新的 $g$（保持 $\|g\|_2$ 不变），使得 SignGD 方向\emph{优于} GD 方向（即与牛顿方向夹角更小）。说明你的设计思路。
+
+\textbf{(c)}（AdamW 的平衡点）讲义 §5 指出，AdamW 在每方向上有平衡点 $|e_{\mathrm{eq}}| = \eta/\lambda'$（与 $\lambda_i$ 无关）。直观上，Adam 的 $g/\sqrt{v}$ 把梯度幅值"抹平"成 $\mathrm{sign}(g) \cdot 1$，而权重衰减拉力 $\lambda' w$ 线性于 $w$。在稳态下两者平衡：
+\[
+\eta \cdot 1 = \lambda' \cdot |e_{\mathrm{eq}}| \;\Longrightarrow\; |e_{\mathrm{eq}}| = \eta/\lambda'.
+\]
+请在本例中：设 $\eta = 0.01$，$\lambda' = 0.1$，给出两方向的平衡点幅值。将其与 SGD + 权重衰减（§3.4）的偏差公式 $\alpha/(\lambda_i + \alpha) \cdot |\tilde w^*_i|$ 对比——\textbf{哪种优化器的偏差分布更"各向同性"？哪种更依赖 $\lambda_i$？}
+
+\begin{thinkbox}
+这道题的核心观察：Adam 因为做了 $\sqrt{v}$ 归一化，损失了 Hessian 的曲率信息——好处是稳定性不受 $\lambda_{\max}$ 约束（可以用很大的 $\eta$），坏处是权重衰减的偏差不再利用曲率信息。SGD 则相反。
+\end{thinkbox}
+
+%=======================================================================
+\section*{题 4：谱范数约束、$UV^\top$ 与 Shampoo 恒等式（§7–§8）}
+
+取
+\[
+G = \begin{pmatrix} 0 & 4 & 0 \\ 3 & 0 & 0 \end{pmatrix} \in \mathbb{R}^{2 \times 3}.
+\]
+
+\textbf{(a)} 直接从 $GG^\top$ 和 $G^\top G$ 的对角结构读出 SVD $G = U \Sigma V^\top$。给出 $U \in \mathbb{R}^{2\times 2}$、$\Sigma \in \mathbb{R}^{2\times 2}$、$V \in \mathbb{R}^{3\times 2}$（注意奇异值按从大到小排序，所以第一列对应 $\sigma_1 = 4$，第二列对应 $\sigma_2 = 3$）。
+
+\textbf{(b)} 写出谱范数约束 $\|\Delta W\|_2 \le \eta$ 下的最优更新 $\Delta W^* = -\eta U V^\top$。验证 $\|U V^\top\|_2 = 1$，且两个方向上的更新幅度相同——这就是 $UV^\top$ 相对于 $G$ 本身的"均衡化"效果。
+
+\textbf{(c)}（Shampoo 恒等式）用 moore–penrose 伪逆（$G^\top G$ 有一个零特征值）计算
+\[
+(GG^\top)^{-1/4},\quad (G^\top G)^{+,-1/4}
+\]
+（即对非零特征值取 $-1/4$ 次幂，零特征值保持为零）。然后验证
+\[
+(GG^\top)^{-1/4}\, G\, (G^\top G)^{+,-1/4} = U V^\top.
+\]
+
+\textbf{(d)}（诱导范数 vs Frobenius）$G$ 的 Frobenius 范数下的"归一化"梯度为 $G/\|G\|_F$。写出 $\|G\|_F$，并与 $UV^\top$ 对比三个方向上的更新幅度比 $\sigma_1 : \sigma_2 : \sigma_3$。根据讲义表格，$F$ 范数给出 $4:3:(0)$，谱范数给出 $1:1:(0)$——谱范数"保方向、削大值"，为什么对条件数差的层有利？
+
+\begin{hintbox}
+对 $2\times 3$ 矩阵， $GG^\top$ 的特征向量就是 $U$ 的列，特征值就是 $\sigma_i^2$。本题 $GG^\top = \mathrm{diag}(16, 9)$，结构非常干净。
+\end{hintbox}
+
+%=======================================================================
+\section*{题 5：RMS$\to$RMS 范数与 Newton–Schulz 迭代（§9–§10）}
+
+\textbf{第一部分：层形状自动进入缩放因子。}
+
+考虑 Transformer 中三类层：
+\[
+W_Q \in \mathbb{R}^{64 \times 768},\quad W_{\mathrm{up}} \in \mathbb{R}^{3072 \times 768},\quad W_{\mathrm{down}} \in \mathbb{R}^{768 \times 3072}.
+\]
+\textbf{(a)} 分别计算三类层的 Muon 缩放因子 $\sqrt{d_{\mathrm{out}}/d_{\mathrm{in}}}$。（注意：讲义的 $W \in \mathbb{R}^{d_{\mathrm{out}} \times d_{\mathrm{in}}}$ 约定——行对应输出。）
+
+\textbf{(b)} 解释为什么"窄 $\to$ 宽"层（如 $W_{\mathrm{up}}$）自动获得\emph{较大}的更新幅度，而"宽 $\to$ 窄"层（如 $W_{\mathrm{down}}$）自动获得\emph{较小}的更新幅度。从 RMS$\to$RMS 诱导范数的定义 $\|A\|_{\mathrm{RMS}\to\mathrm{RMS}} = \sqrt{d_{\mathrm{in}}/d_{\mathrm{out}}}\, \|A\|_2$ 出发解释。
+
+\textbf{第二部分：Newton–Schulz 的手算。}
+
+\textbf{(c)} 讲义中使用经典 NS 多项式 $p(x) = \tfrac{3}{2} x - \tfrac{1}{2} x^3$。设已归一化后的奇异值为
+\[
+(\hat\sigma_1, \hat\sigma_2, \hat\sigma_3) = (0.9,\ 0.5,\ 0.1).
+\]
+手算两步：分别给出每个 $\hat\sigma_i$ 在第 1 步和第 2 步后的值（保留 4 位小数）。
+
+\textbf{(d)} 对 $x = 1$ 的邻域做 Taylor 展开：令 $\varepsilon = 1 - \hat\sigma$，证明
+\[
+1 - p(\hat\sigma) = \tfrac{3}{2}\varepsilon^2 - \tfrac{1}{2}\varepsilon^3.
+\]
+即\textbf{误差每步平方}（超线性/二次收敛）。将此与 $\hat\sigma = 0.9$（$\varepsilon = 0.1$）的数值对照：$0.1 \to \sim 0.015 \to \sim 0.0003$。
+
+\textbf{(e)}（对比小奇异值）对 $\hat\sigma$ 很小（$\hat\sigma \ll 1$），$p(\hat\sigma) \approx \tfrac{3}{2}\hat\sigma$。因此小奇异值是\emph{线性}增长、因子 $1.5$。说明为什么这一"不对称"收敛速度对 Muon 是\textbf{有利}的（提示：梯度方向的小奇异值对应噪声方向或小 batch 秩不足方向）。
+
+\begin{thinkbox}
+Muon 论文实际用的是一个"调过"的多项式 $p(x) = 3.4445\, x - 4.7750\, x^3 + 2.0315\, x^5$。它放弃了 $p(1) = 1$（不动点），换来在 $[0, 1]$ 上更快把\emph{全部}奇异值推到 1 附近。这是一个经典权衡：\emph{不动点精度} vs \emph{全区间收敛速度}。你能想出一个简单的一维例子来说明这个权衡吗？
+\end{thinkbox}
+
+%=======================================================================
+\section*{题 6：谱范数约束下最优更新为 $-UV^\top$ 的分步证明（§8.2）}
+
+讲义 §8.2 证明了：
+\[
+\arg\min_{\|B\|_2 \le 1}\ \mathrm{tr}(G^\top B) \;=\; -U V^\top,
+\]
+其中 $G = U\Sigma V^\top$ 是 $G \in \mathbb{R}^{m \times n}$ 的SVD。请你证明：
+
+\textbf{(a)（Step 1：用 SVD 展开目标函数）}
+
+$G = \sum_{i=1}^r \sigma_i u_i v_i^\top$（$r = \mathrm{rank}(G)$），所以 $G^\top = \sum_i \sigma_i v_i u_i^\top$。请证明：
+\[
+\mathrm{tr}(G^\top B) = \sum_{i=1}^r \sigma_i \cdot u_i^\top B v_i.
+\]
+\begin{itemize}[leftmargin=*,nosep]
+  \item[(a1)] 由 $\mathrm{tr}$ 的线性性，$\mathrm{tr}(G^\top B) = \sum_i \sigma_i\, \mathrm{tr}(v_i u_i^\top B)$。
+  \item[(a2)] 证明 $\mathrm{tr}(v_i u_i^\top B) = u_i^\top B v_i$。（提示：这是一个标量，且 $\mathrm{tr}(ABC) = \mathrm{tr}(CAB)$，或者把 $v_i u_i^\top B$ 展开成 $v_i \cdot (u_i^\top B) = v_i \cdot (B^\top u_i)^\top$ 是秩1矩阵，它的 trace 等于其对角和。）
+\end{itemize}
+
+\textbf{(b)（Step 2：用谱范数的定义给出下界）}
+
+\begin{itemize}[leftmargin=*,nosep]
+  \item[(b1)] Cauchy–Schwarz：$|y^\top (Bx)| \le \|y\|_2 \cdot \|Bx\|_2$。
+  \item[(b2)] 谱范数的定义：$\|Bx\|_2 \le \|B\|_2 \cdot \|x\|_2$。（这一步\emph{就是}谱范数作为算子范数的定义，不要当成不等式证明。）
+  \item[(b3)] 合并：取 $x = v_i, y = u_i$（单位向量），$\|B\|_2 \le 1$，得 $|u_i^\top B v_i| \le 1$。
+\end{itemize}
+
+由此\textbf{请写出}：对所有满足 $\|B\|_2 \le 1$ 的 $B$，
+\[
+\mathrm{tr}(G^\top B) = \sum_i \sigma_i (u_i^\top B v_i) \;\ge\; -\sum_{i=1}^r \sigma_i = -\|G\|_*.
+\]
+（每一项 $\sigma_i \ge 0$，对应的 $u_i^\top B v_i$ 取下界 $-1$，所以求和取下界 $-\sum_i \sigma_i$。）
+
+\textbf{(c)（Step 3：构造 $B^*$ 使等号成立）}
+
+令 $B^* = -UV^\top = -\sum_{j=1}^r u_j v_j^\top$。请独立验证两件事：
+
+\begin{itemize}[leftmargin=*,nosep]
+  \item[(c1)] $\|B^*\|_2 = 1$。
+  提示：$B^*$ 的 SVD 就是 $B^* = U \cdot (-I_r) \cdot V^\top$（或者说 $-UV^\top$ 的奇异值全为 1）。更直接一些：对任意 $x \in \mathbb{R}^n$，$B^* x = -\sum_j u_j (v_j^\top x)$。利用 $\{u_j\}$ 规范正交以及 $\{v_j\}$ 规范正交，计算 $\|B^* x\|_2^2$ 并与 $\|x\|_2^2$ 作比。（你会发现 $\|B^* x\|_2 \le \|x\|_2$，等号在 $x \in \mathrm{span}(v_1, \ldots, v_r)$ 时取到。）
+  
+  \item[(c2)] $u_i^\top B^* v_i = -1$。
+  请把下面的计算每一步都写清楚：
+  \[
+  u_i^\top B^* v_i
+  = u_i^\top \left(-\sum_{j=1}^r u_j v_j^\top\right) v_i
+  = -\sum_{j=1}^r (u_i^\top u_j)\,(v_j^\top v_i)
+  = -\sum_{j=1}^r \delta_{ij}\,\delta_{ji}
+  = -1.
+  \]
+  （其中 $\delta_{ij}$ 来自 $\{u_i\}$ 与 $\{v_i\}$ 的规范正交性。）
+\end{itemize}
+
+\textbf{(d)（拼起来）} 把 (a)、(b)、(c) 拼起来写出完整一句话结论：
+
+\begin{quote}
+"对任意满足 $\|B\|_2 \le 1$ 的 $B$ 有 $\mathrm{tr}(G^\top B) \ge -\sum_i \sigma_i$；且 $B^* = -UV^\top$ 满足约束并取到下界；故 $B^* = -UV^\top$ 是原问题的最优解。$\square$"
+\end{quote}
+
+对应的最优更新为
+\[
+\boxed{\;\Delta W^* = \eta B^* = -\eta\, U V^\top.\;}
+\]
+
+\begin{thinkbox}
+这个证明的"灵魂"是(a)那一步——\textbf{SVD 把 trace 目标函数变成 $\sigma_i$ 加权的 $u_i^\top B v_i$ 之和}，每一项独立，每一项的幅度被谱范数约束卡在 $[-1, 1]$。剩下的工作只是"让每一项都取 $-1$"。讲义里谱范数$\to UV^\top$、$\ell_\infty \to \mathrm{sign}$、$\ell_2\to$ 归一化梯度三个推导之间的共同结构，都是这个"展开 + 逐项取极值 + 构造取等的 $B^*$"的套路。记住这个套路，以后碰到新的范数约束，你自己就能推出对应的最优更新。
+\end{thinkbox}
+
+\end{document}

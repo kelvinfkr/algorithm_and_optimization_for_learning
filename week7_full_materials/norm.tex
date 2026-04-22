@@ -1,0 +1,457 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{mdframed}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{ctex}
+
+\geometry{margin=2.5cm}
+
+\definecolor{defcolor}{RGB}{15,110,86}
+\definecolor{propcolor}{RGB}{83,74,183}
+\definecolor{remcolor}{RGB}{133,79,11}
+
+\newmdenv[linecolor=defcolor, linewidth=2pt, topline=false,
+  bottomline=false, rightline=false, backgroundcolor=gray!5,
+  innerleftmargin=10pt, innerrightmargin=10pt]{defbox}
+
+\newmdenv[linecolor=propcolor, linewidth=2pt, topline=false,
+  bottomline=false, rightline=false, backgroundcolor=gray!5,
+  innerleftmargin=10pt, innerrightmargin=10pt]{propbox}
+
+\newmdenv[linecolor=remcolor, linewidth=2pt, topline=false,
+  bottomline=false, rightline=false, backgroundcolor=gray!5,
+  innerleftmargin=10pt, innerrightmargin=10pt]{rembox}
+
+\newcommand{\RMS}{\mathrm{RMS}}
+\newcommand{\op}{\mathrm{op}}
+\newcommand{\tr}{\operatorname{tr}}
+
+\title{\textbf{矩阵范数}\\[0.5em]
+  \large 优化算法讲义 · 研究生课程}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% -------------------------------------------------------
+\section{预备：向量范数}
+
+给定向量 $x \in \mathbb{R}^d$，常用范数有三种：
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+名称 & 定义 \\
+\midrule
+$\ell_2$ 范数 & $\|x\|_2 = \sqrt{\sum_i x_i^2}$ \\[6pt]
+$\ell_1$ 范数 & $\|x\|_1 = \sum_i |x_i|$ \\[6pt]
+RMS 范数      & $\|x\|_{\RMS} = \dfrac{\|x\|_2}{\sqrt{d}}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+三者关系的关键不等式：
+\[
+  \|x\|_{\RMS} \;\leq\; \|x\|_2 \;\leq\; \sqrt{d}\,\|x\|_{\RMS}
+\]
+
+\begin{rembox}
+\textbf{注意．} RMS 范数对维度做了归一化，使得"元素量级为 $O(1)$"的向量其 RMS 范数也为 $O(1)$，
+而 $\ell_2$ 范数则为 $O(\sqrt{d})$。这一特性使 RMS 范数成为衡量深度学习中激活值与权重
+"信号强度"的自然尺度。
+\end{rembox}
+
+% -------------------------------------------------------
+\section{矩阵范数的公理}
+
+矩阵范数 $\|\cdot\|: \mathbb{R}^{m\times n} \to \mathbb{R}_{\geq 0}$ 需满足四条公理：
+
+\begin{defbox}
+\textbf{定义（矩阵范数公理）．} 对任意 $A, B \in \mathbb{R}^{m\times n}$，$\alpha \in \mathbb{R}$：
+\begin{enumerate}
+  \item[(i)]   $\|A\| = 0 \iff A = 0$
+  \item[(ii)]  $\|\alpha A\| = |\alpha|\,\|A\|$
+  \item[(iii)] $\|A + B\| \leq \|A\| + \|B\|$
+  \item[(iv)]  $\|AB\| \leq \|A\|\,\|B\|$\quad（次乘性）
+\end{enumerate}
+\end{defbox}
+
+条件 (iv) 称为\emph{次乘性}（submultiplicativity），是矩阵范数区别于一般向量范数的核心要求，
+保证了矩阵复合运算的稳定性。
+
+% -------------------------------------------------------
+\section{Frobenius 范数}
+
+\begin{defbox}
+\textbf{定义．}
+\[
+  \|A\|_F = \sqrt{\sum_{i,j} a_{ij}^2} = \sqrt{\tr(A^\top A)}
+\]
+\end{defbox}
+
+Frobenius 范数本质上是将矩阵视为 $mn$ 维向量后的 $\ell_2$ 范数。其与奇异值的关系由以下命题给出。
+
+\begin{propbox}
+\textbf{命题．} 设 $A$ 的奇异值为 $\sigma_1 \geq \sigma_2 \geq \cdots \geq \sigma_r > 0$，则
+\[
+  \|A\|_F = \sqrt{\sum_{i=1}^r \sigma_i^2}
+\]
+\end{propbox}
+
+直觉：$\|A\|_F$ 捕捉了矩阵的"总能量"，对所有奇异值一视同仁。
+
+% -------------------------------------------------------
+\section{奇异值分解与最优低秩逼近}
+
+\subsection{奇异值分解}
+
+\begin{defbox}
+\textbf{定理（奇异值分解，SVD）．} 设 $A \in \mathbb{R}^{m \times n}$，$\mathrm{rank}(A) = r$，
+则存在分解
+\[
+  A = U \Sigma V^\top
+\]
+其中 $U \in \mathbb{R}^{m \times r}$ 列正交（$U^\top U = I_r$），
+$V \in \mathbb{R}^{n \times r}$ 列正交（$V^\top V = I_r$），
+$\Sigma = \mathrm{diag}(\sigma_1, \ldots, \sigma_r)$ 且
+$\sigma_1 \geq \sigma_2 \geq \cdots \geq \sigma_r > 0$。
+\end{defbox}
+
+\paragraph{外积和展开．}
+将三个矩阵按列（行）写出：
+\[
+  U = \begin{bmatrix} u_1 & u_2 & \cdots & u_r \end{bmatrix},
+  \quad
+  \Sigma = \begin{bmatrix} \sigma_1 & & \\ & \ddots & \\ & & \sigma_r \end{bmatrix},
+  \quad
+  V^\top = \begin{bmatrix} v_1^\top \\ v_2^\top \\ \vdots \\ v_r^\top \end{bmatrix}
+\]
+先计算 $\Sigma V^\top$：其第 $i$ 行等于 $\sigma_i v_i^\top$。再左乘 $U$，
+按列分配得到
+\[
+  A \;=\; U\Sigma V^\top
+    \;=\; \sum_{i=1}^{r} u_i \cdot \sigma_i v_i^\top
+    \;=\; \sum_{i=1}^{r} \sigma_i \, u_i v_i^\top
+\]
+其中 $u_i \in \mathbb{R}^m$ 为列向量，$v_i^\top \in \mathbb{R}^{1\times n}$ 为行向量，
+外积 $u_i v_i^\top \in \mathbb{R}^{m \times n}$ 的所有列均为 $u_i$ 的倍数，因此秩恰好为 1。
+
+\begin{rembox}
+\textbf{几何直觉．}
+每一项 $\sigma_i u_i v_i^\top$ 描述一种独立的"模式"：
+将输入 $x$ 投影到 $v_i$ 方向（取内积 $v_i^\top x$），
+缩放 $\sigma_i$ 倍，再沿输出方向 $u_i$ 展开。
+矩阵 $A$ 是 $r$ 种模式的叠加，$\sigma_i$ 越大，该模式在映射中贡献越重。
+截断 SVD 保留前 $k$ 项，等价于只保留能量最大的 $k$ 种模式，
+丢弃能量最小的尾部——这正是 Eckart-Young 定理的几何本质。
+\end{rembox}
+
+两种范数由此统一表达：
+\[
+  \|A\|_{\op} = \sigma_1, \qquad \|A\|_F = \sqrt{\sigma_1^2 + \cdots + \sigma_r^2}
+\]
+
+\subsection{最优低秩逼近：Eckart-Young 定理}
+
+给定秩预算 $k < r$，自然的问题是：用一个秩不超过 $k$ 的矩阵逼近 $A$，最小误差是多少？
+
+\begin{defbox}
+\textbf{定理（Eckart-Young，1936）．} 设 $A = U\Sigma V^\top$ 为 SVD，
+定义截断矩阵
+\[
+  A_k = \sum_{i=1}^{k} \sigma_i \, u_i v_i^\top = U_k \Sigma_k V_k^\top
+\]
+其中 $U_k, V_k$ 取前 $k$ 列，$\Sigma_k = \mathrm{diag}(\sigma_1,\ldots,\sigma_k)$。则对
+Frobenius 范数和谱范数，$A_k$ 均为最优秩-$k$ 逼近：
+\[
+  A_k = \mathop{\arg\min}_{\mathrm{rank}(B) \leq k} \|A - B\|_F
+       = \mathop{\arg\min}_{\mathrm{rank}(B) \leq k} \|A - B\|_{\op}
+\]
+最优误差分别为
+\[
+  \|A - A_k\|_F = \sqrt{\sigma_{k+1}^2 + \cdots + \sigma_r^2}, \qquad
+  \|A - A_k\|_{\op} = \sigma_{k+1}
+\]
+\end{defbox}
+
+\begin{rembox}
+\textbf{直觉．} Eckart-Young 定理告诉我们：在 Frobenius 和谱范数两种意义下，
+"丢掉小奇异值"恰好是最优策略，而非启发式选择。
+截断误差由第 $k+1$ 个奇异值完全刻画——谱快速衰减时，少量主成分即可高精度捕捉矩阵的全部"信息量"。
+\end{rembox}
+
+\paragraph{与 GaLore 的联系．}
+GaLore（见 §\ref{sec:galore}）正是将 Eckart-Young 定理应用于\emph{梯度矩阵} $G_t$：
+对 $G_t$ 做截断 SVD，取前 $r$ 个左奇异向量 $P_t = U_r$，
+得到 Frobenius 意义下的最优秩-$r$ 投影子空间，
+从而在压缩优化器状态的同时最小化梯度信息的损失。
+
+% -------------------------------------------------------
+\section{算子范数（谱范数）}
+
+算子范数从\emph{诱导范数}的视角出发：矩阵 $A$ 作为线性映射，最多能把单位球放大多少倍？
+
+\begin{defbox}
+\textbf{定义（诱导范数）．} 给定向量范数 $\|\cdot\|_\alpha$（输入空间）和 $\|\cdot\|_\beta$（输出空间），
+诱导范数定义为
+\[
+  \|A\|_{\alpha \to \beta}
+  = \sup_{x \neq 0} \frac{\|Ax\|_\beta}{\|x\|_\alpha}
+  = \sup_{\|x\|_\alpha = 1} \|Ax\|_\beta
+\]
+\end{defbox}
+
+当输入输出均取 $\ell_2$ 范数时，即为\emph{谱范数}（算子范数）：
+\[
+  \|A\|_{\op} = \|A\|_{\ell_2 \to \ell_2} = \sigma_{\max}(A)
+\]
+
+\begin{propbox}
+\textbf{命题（Frobenius 与谱范数的夹逼）．}
+\[
+  \|A\|_{\op} \leq \|A\|_F \leq \sqrt{r}\,\|A\|_{\op}
+\]
+其中 $r = \operatorname{rank}(A)$。右侧等号在 $A$ 奇异值全相等时取到。
+\end{propbox}
+
+% -------------------------------------------------------
+\section{RMS$\to$RMS 范数与步长安全性}
+
+将诱导范数的输入输出均换为 RMS 范数，得到深度学习中最自然的权重矩阵度量。
+
+\begin{defbox}
+\textbf{定义．} 对 $A \in \mathbb{R}^{d_{\mathrm{out}} \times d_{\mathrm{in}}}$，
+\[
+  \|A\|_{\RMS\to\RMS}
+  = \sup_{\|x\|_{\RMS}=1} \|Ax\|_{\RMS}
+\]
+\end{defbox}
+
+利用 $\|x\|_{\RMS}=1 \iff \|x\|_2 = \sqrt{d_{\mathrm{in}}}$，代入化简：
+\[
+  \|A\|_{\RMS\to\RMS}
+  = \sup_{\|x\|_2 = \sqrt{d_{\mathrm{in}}}}
+    \frac{\|Ax\|_2}{\sqrt{d_{\mathrm{out}}}}
+  = \sqrt{\frac{d_{\mathrm{in}}}{d_{\mathrm{out}}}} \cdot \|A\|_{\op}
+\]
+
+这一额外因子 $\sqrt{d_{\mathrm{in}}/d_{\mathrm{out}}}$ 直接决定了不同形状权重矩阵的安全学习率。
+
+\begin{propbox}
+\textbf{命题（安全步长）．} 若以"梯度更新不超出 RMS 意义下的单位球"为标准，安全步长正比于
+\[
+  \eta_{\mathrm{safe}}
+  \;\propto\;
+  \frac{1}{\|G\|_{\RMS\to\RMS}}
+  = \sqrt{\frac{d_{\mathrm{out}}}{d_{\mathrm{in}}}} \cdot \frac{1}{\|G\|_{\op}}
+\]
+\end{propbox}
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+层形状 & $d_{\mathrm{in}}$ vs $d_{\mathrm{out}}$ & $\sqrt{d_{\mathrm{in}}/d_{\mathrm{out}}}$ & RMS→RMS 范数 & 安全步长 \\
+\midrule
+宽 $\to$ 窄 & $d_{\mathrm{in}} \gg d_{\mathrm{out}}$ & $\gg 1$ & 大 & 小 \\
+方阵         & $d_{\mathrm{in}} = d_{\mathrm{out}}$ & $= 1$   & $= \|A\|_{\op}$ & 基准 \\
+窄 $\to$ 宽 & $d_{\mathrm{in}} \ll d_{\mathrm{out}}$ & $\ll 1$ & 小 & 大 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{rembox}
+\textbf{直觉．} RMS→RMS 范数度量的是"更新矩阵将输入信号放大多少倍"。宽→窄层有更强的输入聚合效应，
+同等大小的 $\Delta W$ 对输出扰动更大，因此必须用更小步长控制。这正是 $\mu$P（最大更新参数化）
+对不同层赋予不同学习率缩放的理论依据。
+\end{rembox}
+
+% -------------------------------------------------------
+\section{低秩矩阵与 LoRA}
+
+LoRA 将权重更新参数化为低秩分解：
+\[
+  \Delta W = BA,
+  \quad
+  B \in \mathbb{R}^{d_{\mathrm{out}}\times r},\;
+  A \in \mathbb{R}^{r \times d_{\mathrm{in}}},\;
+  r \ll \min(d_{\mathrm{in}}, d_{\mathrm{out}})
+\]
+
+从范数的角度，低秩约束通过次乘性天然压制了更新幅度：
+\[
+  \|BA\|_{\op} \leq \|B\|_{\op}\,\|A\|_{\op}
+\]
+\[
+  \|BA\|_{\RMS\to\RMS}
+  = \sqrt{\frac{d_{\mathrm{in}}}{d_{\mathrm{out}}}}\,\|BA\|_{\op}
+  \leq \sqrt{\frac{d_{\mathrm{in}}}{d_{\mathrm{out}}}}\,\|B\|_{\op}\,\|A\|_{\op}
+\]
+
+训练中冻结 $W_0$，仅优化 $A, B$，反向传播与普通矩阵链式法则完全一致：
+\[
+  \nabla_A \mathcal{L} = B^\top \delta \cdot x^\top,
+  \qquad
+  \nabla_B \mathcal{L} = \delta \cdot (Ax)^\top
+\]
+其中 $\delta = \partial\mathcal{L}/\partial y$ 为输出端梯度，$x$ 为输入。
+
+\begin{propbox}
+\textbf{推论（LoRA+ / $\mu$LoRA 的理论依据）．}
+$A \in \mathbb{R}^{r\times d_{\mathrm{in}}}$ 为窄$\to$宽映射，RMS→RMS 范数小，安全步长大；
+$B \in \mathbb{R}^{d_{\mathrm{out}}\times r}$ 为宽$\to$窄映射，RMS→RMS 范数大，安全步长小。
+两者使用同一学习率（原版 LoRA）在维度失配时是次优的，最优比例约为
+\[
+  \frac{\eta_B}{\eta_A} \;\propto\; \sqrt{\frac{d_{\mathrm{in}}}{r}}
+\]
+\end{propbox}
+
+% -------------------------------------------------------
+\section{GaLore：梯度低秩投影}
+\label{sec:galore}
+
+\subsection{动机：LoRA 的局限}
+
+LoRA 在\emph{参数空间}施加低秩约束：$\Delta W = BA$ 始终限于一个固定的秩-$r$ 子空间。
+这带来两个问题：
+\begin{enumerate}
+  \item 子空间在训练开始前就固定，无法跟随梯度信号的演化；
+  \item 权重更新本身是低秩的，全模型表达能力受限。
+\end{enumerate}
+
+GaLore（Gradient Low-Rank Projection，Zhao et al.\ 2024）转换思路：
+不约束权重更新，而是在\emph{梯度空间}施加低秩投影——权重保持全秩更新，
+节省内存的方式是压缩优化器的\emph{状态}（Adam 的一阶、二阶矩）。
+
+\subsection{算法}
+
+设当前步梯度为 $G_t = \nabla_{W} \mathcal{L} \in \mathbb{R}^{d_{\mathrm{out}} \times d_{\mathrm{in}}}$。
+GaLore 的核心操作分三步。
+
+\paragraph{步骤 1：寻找低秩子空间．}
+对 $G_t$ 做截断奇异值分解：
+\[
+  G_t \approx U_t \Sigma_t V_t^\top,
+  \quad U_t \in \mathbb{R}^{d_{\mathrm{out}}\times r},\;
+  V_t \in \mathbb{R}^{d_{\mathrm{in}}\times r}
+\]
+取左奇异向量 $P_t = U_t \in \mathbb{R}^{d_{\mathrm{out}}\times r}$ 作为投影矩阵。
+
+\paragraph{步骤 2：在低秩空间中运行优化器．}
+将梯度投影到低秩子空间：
+\[
+  \tilde{G}_t = P_t^\top G_t \in \mathbb{R}^{r \times d_{\mathrm{in}}}
+\]
+对 $\tilde{G}_t$ 运行 Adam（或任意自适应优化器），得到低秩更新量 $\tilde{M}_t \in \mathbb{R}^{r \times d_{\mathrm{in}}}$。
+Adam 的一阶矩 $m$ 和二阶矩 $v$ 均在低秩空间中维护，维度为 $r \times d_{\mathrm{in}}$ 而非 $d_{\mathrm{out}} \times d_{\mathrm{in}}$。
+
+\paragraph{步骤 3：反投影，更新权重．}
+\[
+  W_{t+1} = W_t - \eta \cdot P_t \tilde{M}_t
+\]
+
+\noindent 完整流程见算法~\ref{alg:galore}。
+
+\begin{algorithm}[t]
+\caption{GaLore（单层，简化版）}
+\label{alg:galore}
+\begin{algorithmic}[1]
+\Require 权重 $W_0$，秩 $r$，学习率 $\eta$，子空间更新周期 $T_{\mathrm{sub}}$
+\For{$t = 1, 2, \ldots$}
+  \State 计算梯度 $G_t = \nabla_W \mathcal{L}$
+  \If{$t \bmod T_{\mathrm{sub}} = 0$}
+    \State $U_t, \Sigma_t, V_t \leftarrow \mathrm{SVD}_r(G_t)$\quad（截断至秩 $r$）
+    \State $P_t \leftarrow U_t$
+  \EndIf
+  \State $\tilde{G}_t \leftarrow P_t^\top G_t$\quad（投影，$r \times d_{\mathrm{in}}$）
+  \State $\tilde{M}_t \leftarrow \mathrm{Adam}(\tilde{G}_t)$\quad（低秩空间中更新）
+  \State $W_{t+1} \leftarrow W_t - \eta \cdot P_t \tilde{M}_t$\quad（反投影）
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{从范数视角理解 GaLore}
+
+\paragraph{梯度的低秩结构．}
+GaLore 的有效性依赖于一个经验观测：训练过程中，梯度矩阵 $G_t$ 的奇异值谱迅速衰减，
+即梯度的"有效秩"远低于 $\min(d_{\mathrm{out}}, d_{\mathrm{in}})$。
+用 Frobenius 范数量化这一现象：设截断误差为
+\[
+  \varepsilon_r = \|G_t - P_t P_t^\top G_t\|_F
+  = \sqrt{\sum_{i > r} \sigma_i(G_t)^2}
+\]
+若谱快速衰减，$\varepsilon_r$ 在较小的 $r$ 下即可忽略不计。
+
+\paragraph{投影不改变主方向的范数．}
+对于在低秩子空间 $\mathrm{col}(P_t)$ 内的向量 $v$，有
+\[
+  \|P_t P_t^\top v\|_2 = \|v\|_2
+\]
+即投影是等距的。因此，梯度在主方向上的信号完整保留，被丢弃的仅是"噪声子空间"中的分量。
+
+\begin{propbox}
+\textbf{命题（GaLore 的范数界）．}
+设 $P_t$ 为 $G_t$ 的前 $r$ 个左奇异向量，则
+\[
+  \|P_t \tilde{G}_t\|_F = \|P_t P_t^\top G_t\|_F \leq \|G_t\|_F
+\]
+等号当 $\mathrm{rank}(G_t) \leq r$ 时成立。反投影步长满足：
+\[
+  \|P_t \tilde{M}_t\|_{\RMS\to\RMS}
+  = \sqrt{\frac{d_{\mathrm{in}}}{d_{\mathrm{out}}}} \cdot \|P_t \tilde{M}_t\|_{\op}
+  \leq \sqrt{\frac{d_{\mathrm{in}}}{d_{\mathrm{out}}}} \cdot \|\tilde{M}_t\|_{\op}
+\]
+其中最后一步利用了 $\|P_t\|_{\op} = 1$（$P_t$ 为列正交矩阵）。
+\end{propbox}
+
+\subsection{GaLore 与 LoRA 的对比}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & LoRA & GaLore \\
+\midrule
+低秩约束对象   & 权重更新 $\Delta W$ & 优化器状态 $m_t, v_t$ \\
+权重更新秩     & $\leq r$（始终低秩） & 全秩 \\
+子空间是否固定 & 是（训练全程） & 否（每 $T_{\mathrm{sub}}$ 步更新） \\
+新增参数       & $A, B$（可学习） & 无（投影矩阵不可学习） \\
+内存节省来源   & 梯度和优化器状态 & 仅优化器状态 \\
+适用场景       & 微调（fine-tuning） & 预训练或微调均可 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{rembox}
+\textbf{核心区别．} LoRA 的低秩约束是\emph{结构性}的——它改变了模型能表达的函数类；
+GaLore 的低秩约束是\emph{计算性}的——它只影响优化路径，不改变模型的表达能力。
+从范数角度看，LoRA 的 $\Delta W$ 秩最高为 $r$，而 GaLore 的 $\Delta W = \eta P_t \tilde{M}_t$
+在不同步之间累积后可以是全秩的。
+\end{rembox}
+
+\subsection{内存复杂度}
+
+设 $W \in \mathbb{R}^{d_{\mathrm{out}} \times d_{\mathrm{in}}}$，Adam 需维护一阶矩 $m$ 和二阶矩 $v$，
+各占 $d_{\mathrm{out}} \times d_{\mathrm{in}}$ 个浮点数。
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+方法 & 优化器状态内存 & 节省比例 \\
+\midrule
+全量 Adam & $2 \cdot d_{\mathrm{out}} d_{\mathrm{in}}$ & — \\
+GaLore    & $2r \cdot d_{\mathrm{in}} + r \cdot d_{\mathrm{out}}$ & $\approx 1 - r/d_{\mathrm{out}}$ \\
+LoRA      & $2r(d_{\mathrm{out}} + d_{\mathrm{in}})$ & $\approx 1 - r/d_{\mathrm{out}} - r/d_{\mathrm{in}}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+GaLore 额外需要存储投影矩阵 $P_t \in \mathbb{R}^{d_{\mathrm{out}}\times r}$（$O(d_{\mathrm{out}} r)$），
+以及每隔 $T_{\mathrm{sub}}$ 步进行一次 SVD（复杂度 $O(d_{\mathrm{out}}^2 r)$ 或用随机 SVD 降低）。
+实践中 $T_{\mathrm{sub}} = 200 \sim 1000$ 步，SVD 开销可以摊薄。
+
+\end{document}

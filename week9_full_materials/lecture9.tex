@@ -1,0 +1,2619 @@
+\documentclass[12pt, a4paper]{ctexart}
+
+%========================================
+% 宏包引入
+%========================================
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{bm}
+
+% 设置绘图库
+\usetikzlibrary{arrows.meta, positioning, calc, shapes, decorations.pathreplacing, patterns}
+\pgfplotsset{compat=1.18}
+
+%========================================
+% 自定义颜色与环境
+%========================================
+\definecolor{myblue}{RGB}{0, 102, 204}
+\definecolor{myred}{RGB}{204, 0, 0}
+\definecolor{mygreen}{RGB}{0, 153, 76}
+\definecolor{mypurple}{RGB}{128, 0, 128}
+\definecolor{myorange}{RGB}{255, 140, 0}
+
+% 板书环境 (模拟黑板推导)
+\tcbuselibrary{skins, breakable}
+\newtcolorbox{blackboard}[1][]{
+    colback=gray!10,
+    colframe=black!70,
+    fonttitle=\bfseries,
+    title={#1},
+    boxrule=0.5mm,
+    sharp corners,
+    breakable
+}
+
+% 直觉与洞察
+\newtcolorbox{insight}[1][]{
+    colback=yellow!10,
+    colframe=orange!60!black,
+    fonttitle=\bfseries,
+    title={�� 物理直觉：#1},
+    breakable
+}
+
+% 关键结论
+\newtcolorbox{keypoint}[1][]{
+    colback=myblue!5,
+    colframe=myblue,
+    fonttitle=\bfseries,
+    title={�� 核心结论：#1},
+    breakable
+}
+
+% 数学要点
+\newtcolorbox{mathbox}[1][]{
+    colback=mygreen!5,
+    colframe=mygreen!70!black,
+    fonttitle=\bfseries,
+    title={�� 数学要点：#1},
+    breakable
+}
+
+% 实验环境
+\newtcolorbox{experiment}[1][]{
+    colback=mypurple!5,
+    colframe=mypurple,
+    fonttitle=\bfseries,
+    title={��️ 实验：#1},
+    breakable
+}
+
+% 定义与定理
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{definition}[theorem]{定义}
+\newtheorem{proposition}[theorem]{命题}
+\newtheorem{corollary}[theorem]{推论}
+
+%========================================
+% 页眉页脚
+%========================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{优化算法：从理论到大规模实践}
+\fancyhead[R]{第9周讲义}
+\fancyfoot[C]{\thepage}
+
+%========================================
+% 正文开始
+%========================================
+\title{\textbf{深度学习优化理论}\\[0.5em]
+\Large 隐式偏好、鞍点几何与训练动力学}
+\author{第9周课程讲义}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+本周我们深入探讨深度学习优化中三个最反直觉的现象。第一，用线性代数解释为什么\textbf{过参数化}反而有助于泛化（隐式正则化），并把这个故事推广到\textbf{Boosting}——同样的"训练误差到 0 后继续优化"的现象在另一种语言下重演为 margin maximization。第二，借助随机矩阵理论与置换对称性理解为什么高维空间中\textbf{几乎所有临界点都是鞍点}，以及如何逃离它们。第三，通过 Cohen 等人发现的 \textbf{Edge of Stability} 现象，看到神经网络如何系统性违反经典稳定性条件 $\eta < 2/\lambda_{\max}$ 而仍然成功训练。我们最后实际观察 Hessian 谱与权重谱，连接理论与实践。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%===========================================================
+\section{开场：经典理论的三大悖论}
+%===========================================================
+
+在开始技术内容之前，让我们先明确今天要解决的三个核心悖论：
+
+\begin{center}
+\begin{tikzpicture}[
+    box/.style={rectangle, draw, rounded corners, minimum width=3.5cm, minimum height=1.5cm, align=center, font=\small},
+    arrow/.style={->, thick, >=stealth}
+]
+    % 经典理论
+    \node[box, fill=red!10] (classic1) at (0, 4) {经典：参数多\\必然过拟合};
+    \node[box, fill=red!10] (classic2) at (5, 4) {经典：非凸优化\\困难重重};
+    \node[box, fill=red!10] (classic3) at (10, 4) {经典：$\eta > 2/\lambda_{\max}$\\必然发散};
+    
+    % 箭头
+    \draw[arrow, myred] (0, 3) -- (0, 2);
+    \draw[arrow, myred] (5, 3) -- (5, 2);
+    \draw[arrow, myred] (10, 3) -- (10, 2);
+    
+    % 深度学习现实
+    \node[box, fill=green!10] (dl1) at (0, 1) {现实：过参数化\\泛化很好};
+    \node[box, fill=green!10] (dl2) at (5, 1) {现实：SGD 轻松\\找到好解};
+    \node[box, fill=green!10] (dl3) at (10, 1) {现实：$\eta\lambda_{\max} \approx 2$\\长期稳定};
+    
+    % 解释
+    \node[font=\small\bfseries, myblue] at (0, -0.2) {隐式偏好（三种）};
+    \node[font=\small\bfseries, myblue] at (5, -0.2) {鞍点统计 + 对称性};
+    \node[font=\small\bfseries, myblue] at (10, -0.2) {Edge of Stability};
+\end{tikzpicture}
+\end{center}
+
+\begin{keypoint}[本周的核心信息]
+\textbf{不是参数多少决定泛化，是优化算法选择了什么解。}
+
+深度学习的成功不是"魔法"，而是高维几何与优化动力学的必然结果。
+\end{keypoint}
+
+%===========================================================
+\section{第一部分：过参数化与隐式正则化}
+%===========================================================
+
+\subsection{问题设定：欠定线性回归}
+
+考虑最简单的过参数化场景：\textbf{欠定线性回归}。
+
+\begin{definition}[欠定系统]
+设数据矩阵 $X \in \mathbb{R}^{n \times d}$，标签 $y \in \mathbb{R}^n$，其中样本数 $n < d$ 参数数。优化问题为：
+\[
+\min_{w \in \mathbb{R}^d} L(w) = \frac{1}{2}\|Xw - y\|_2^2
+\]
+由于方程 $Xw = y$ 有无穷多解（解空间是 $d-n$ 维仿射子空间），问题是：\textbf{梯度下降会选择哪个解？}
+\end{definition}
+
+这个问题的答案揭示了深度学习泛化的核心机制。
+
+\subsection{推导 A：GD 轨迹始终在 Row(X)}
+
+这是一个完全用线性代数和归纳法就能完成的证明。
+
+\begin{blackboard}[完整推导：梯度在行空间，轨迹不离行空间]
+
+\textbf{Step 1：写出梯度的显式表达}
+
+损失函数：
+\[
+L(w) = \frac{1}{2}\|Xw - y\|_2^2
+\]
+
+对 $w$ 求梯度：
+\[
+\nabla L(w) = X^\top (Xw - y)
+\]
+
+\textbf{Step 2：将梯度展开为行向量的线性组合}
+
+设 $X$ 的第 $i$ 行为 $x_i^\top \in \mathbb{R}^{1 \times d}$，则 $X^\top$ 的第 $i$ 列就是 $x_i \in \mathbb{R}^d$。
+
+记 $r_i = x_i^\top w - y_i$（第 $i$ 个残差），则：
+\begin{align*}
+\nabla L(w) &= X^\top (Xw - y) \\
+&= X^\top \begin{pmatrix} x_1^\top w - y_1 \\ \vdots \\ x_n^\top w - y_n \end{pmatrix} \\
+&= \begin{pmatrix} | & & | \\ x_1 & \cdots & x_n \\ | & & | \end{pmatrix} \begin{pmatrix} r_1 \\ \vdots \\ r_n \end{pmatrix} \\
+&= \sum_{i=1}^{n} r_i \cdot x_i
+\end{align*}
+
+\textbf{关键观察}：$\nabla L(w)$ 是 $\{x_1, \ldots, x_n\}$ 的线性组合！
+
+因此：
+\[
+\boxed{\nabla L(w) \in \text{span}\{x_1, \ldots, x_n\} = \text{Row}(X), \quad \forall w}
+\]
+
+\textbf{Step 3：归纳证明轨迹始终在行空间}
+
+\textbf{基础情况}：$w_0 = 0 \in \text{Row}(X)$（零向量在任何子空间中）
+
+\textbf{归纳假设}：假设 $w_t \in \text{Row}(X)$
+
+\textbf{归纳步骤}：GD 更新为
+\[
+w_{t+1} = w_t - \eta \nabla L(w_t)
+\]
+
+由归纳假设，$w_t \in \text{Row}(X)$。由 Step 2，$\nabla L(w_t) \in \text{Row}(X)$。
+
+由于 $\text{Row}(X)$ 是线性子空间，它对线性组合封闭：
+\[
+w_{t+1} = \underbrace{1 \cdot w_t}_{\in \text{Row}(X)} + \underbrace{(-\eta) \cdot \nabla L(w_t)}_{\in \text{Row}(X)} \in \text{Row}(X)
+\]
+
+\textbf{结论}：
+\[
+\boxed{\forall t \geq 0, \quad w_t \in \text{Row}(X)}
+\]
+
+\end{blackboard}
+
+\begin{insight}[几何图像]
+想象 $\mathbb{R}^d$ 空间被分成两个正交的部分：$\text{Row}(X)$（$r$ 维）和 $\text{Null}(X)$（$d-r$ 维）。
+
+GD 从原点出发，但它的"推力"（梯度）永远只指向 $\text{Row}(X)$ 内部。就像一个人被限制在一个平面上滑行，永远无法跳出这个平面。
+\end{insight}
+
+\subsection{推导 B：SVD 坐标下的逐分量分析}
+
+现在我们用 SVD 来精确看清 GD 在做什么——这会让伪逆解的出现变得自然而然。
+
+\begin{blackboard}[完整推导：在 SVD 坐标系里看 GD]
+
+\textbf{Step 1：SVD 分解}
+
+设 $X \in \mathbb{R}^{n \times d}$ 的 SVD 为：
+\[
+X = U \Sigma V^\top
+\]
+其中：
+\begin{itemize}
+    \item $U \in \mathbb{R}^{n \times n}$ 是正交矩阵（左奇异向量）
+    \item $V \in \mathbb{R}^{d \times d}$ 是正交矩阵（右奇异向量）
+    \item $\Sigma \in \mathbb{R}^{n \times d}$ 是对角矩阵，$\Sigma = \text{diag}(\sigma_1, \ldots, \sigma_r, 0, \ldots, 0)$
+    \item $r = \text{rank}(X)$，$\sigma_1 \geq \cdots \geq \sigma_r > 0$
+\end{itemize}
+
+\textbf{Step 2：坐标变换}
+
+定义新坐标 $z = V^\top w \in \mathbb{R}^d$（由于 $V$ 正交，$w = Vz$）。
+
+将损失函数改写：
+\begin{align*}
+L(w) &= \frac{1}{2}\|Xw - y\|_2^2 \\
+&= \frac{1}{2}\|U\Sigma V^\top w - y\|_2^2 \\
+&= \frac{1}{2}\|U\Sigma z - y\|_2^2 \\
+&= \frac{1}{2}\|U(\Sigma z - U^\top y)\|_2^2 \\
+&= \frac{1}{2}\|\Sigma z - \tilde{y}\|_2^2 \quad \text{（其中 $\tilde{y} = U^\top y$）}
+\end{align*}
+
+最后一步用了 $U$ 的正交性：$\|Uv\|_2 = \|v\|_2$。
+
+\textbf{Step 3：损失函数的分量形式}
+
+由于 $\Sigma$ 是对角的，损失完全解耦：
+\[
+L = \frac{1}{2}\sum_{k=1}^{r} (\sigma_k z_k - \tilde{y}_k)^2 + \frac{1}{2}\sum_{k=r+1}^{n} \tilde{y}_k^2
+\]
+
+注意：
+\begin{itemize}
+    \item 前 $r$ 项依赖于 $z_1, \ldots, z_r$（非零奇异值对应的坐标）
+    \item 后面的项是常数（与 $z$ 无关）
+    \item $z_{r+1}, \ldots, z_d$ 完全不出现在损失中！
+\end{itemize}
+
+\textbf{Step 4：对每个坐标的 GD}
+
+对 $k \leq r$（非零奇异值）：
+\[
+\frac{\partial L}{\partial z_k} = \sigma_k(\sigma_k z_k - \tilde{y}_k)
+\]
+
+GD 更新：
+\[
+z_k^{(t+1)} = z_k^{(t)} - \eta \cdot \sigma_k(\sigma_k z_k^{(t)} - \tilde{y}_k)
+\]
+
+令 $z_k^* = \tilde{y}_k / \sigma_k$（使得 $\sigma_k z_k^* = \tilde{y}_k$），则：
+\[
+z_k^{(t+1)} - z_k^* = (1 - \eta \sigma_k^2)(z_k^{(t)} - z_k^*)
+\]
+
+这是一维线性迭代！收敛条件：$|1 - \eta \sigma_k^2| < 1$，即 $0 < \eta < 2/\sigma_k^2$。
+
+若 $\eta < 2/\sigma_{\max}^2$，则所有 $k \leq r$ 都满足收敛条件：
+\[
+z_k^{(t)} \to z_k^* = \frac{\tilde{y}_k}{\sigma_k}
+\]
+
+对 $k > r$（零奇异值）：
+\[
+\frac{\partial L}{\partial z_k} = 0
+\]
+
+梯度为零，$z_k$ 永不更新。若 $z_k^{(0)} = 0$，则 $z_k^{(t)} = 0, \forall t$。
+
+\textbf{Step 5：汇总极限解}
+
+GD 的极限解在 $z$ 坐标下为：
+\[
+z_k^* = \begin{cases}
+\tilde{y}_k / \sigma_k = (U^\top y)_k / \sigma_k, & k \leq r \\
+0, & k > r
+\end{cases}
+\]
+
+这正是 $z^* = \Sigma^+ \tilde{y}$，其中 $\Sigma^+$ 是 $\Sigma$ 的伪逆：
+\[
+\Sigma^+ = \text{diag}(1/\sigma_1, \ldots, 1/\sigma_r, 0, \ldots, 0)
+\]
+
+\textbf{Step 6：回到原坐标}
+
+\[
+w^* = Vz^* = V\Sigma^+ U^\top y = X^+ y
+\]
+
+这就是 Moore-Penrose 伪逆！也可以写成：
+\[
+\boxed{w^* = X^\top (XX^\top)^{-1} y}
+\]
+
+（当 $X$ 行满秩时，$X^+ = X^\top(XX^\top)^{-1}$）
+
+\end{blackboard}
+
+\begin{keypoint}[SVD 视角的核心洞见]
+在 SVD 坐标系下，GD 对每个奇异值方向\textbf{独立}做一维迭代：
+\begin{itemize}
+    \item \textbf{非零奇异值方向}（$k \leq r$）：收敛到 $z_k^* = \tilde{y}_k/\sigma_k$
+    \item \textbf{零奇异值方向}（$k > r$）：梯度为零，停留在初始值
+\end{itemize}
+
+从 $w_0 = 0$ 出发意味着 $z_0 = 0$，所以零奇异值方向永远是 0。
+
+这就是为什么 GD 找到最小范数解——它\textbf{不在零空间方向移动}！
+\end{keypoint}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % 坐标轴
+    \draw[->, thick] (-0.5, 0) -- (6, 0) node[right] {$z_1$（$\sigma_1 > 0$）};
+    \draw[->, thick] (0, -0.5) -- (0, 4.5) node[above] {$z_2$（$\sigma_2 = 0$，零空间）};
+    
+    % 解空间（竖直线）
+    \draw[thick, myblue, dashed] (4, -0.3) -- (4, 4.3);
+    \node[myblue, font=\small] at (4.8, 4) {解空间 $Xw=y$};
+    
+    % GD 轨迹
+    \draw[thick, red, ->] (0, 0) -- (1, 0);
+    \draw[thick, red, ->] (1, 0) -- (2, 0);
+    \draw[thick, red, ->] (2, 0) -- (3, 0);
+    \draw[thick, red, ->] (3, 0) -- (3.6, 0);
+    \draw[thick, red, ->] (3.6, 0) -- (3.85, 0);
+    \fill[red] (4, 0) circle (3pt);
+    \node[red, font=\small] at (4, -0.5) {$w^*_{\text{GD}}$};
+    
+    % 其他解
+    \fill[gray] (4, 1.5) circle (2pt);
+    \fill[gray] (4, 3) circle (2pt);
+    \node[gray, font=\small] at (5, 2.2) {其他解};
+    
+    % 标注
+    \node[font=\small] at (2, -0.8) {GD 沿 $z_1$ 方向移动};
+    \node[font=\small] at (-0.8, 2) [rotate=90] {$z_2$ 方向不动};
+    
+    % 起点
+    \fill[black] (0, 0) circle (3pt);
+    \node[font=\small] at (0.3, 0.4) {$w_0=0$};
+\end{tikzpicture}
+\caption{SVD 坐标下的 GD 轨迹：沿非零奇异值方向移动，零奇异值方向保持为 0，因此收敛到解空间中离原点最近的点。}
+\end{figure}
+
+\subsection{最小范数解的意义}
+
+\begin{theorem}[GD 的隐式正则化]
+对于欠定线性回归问题，从 $w_0 = 0$ 出发的梯度下降收敛到最小 $\ell_2$ 范数解：
+\[
+w^* = X^\top (XX^\top)^{-1} y = \arg\min_{Xw=y} \|w\|_2
+\]
+\end{theorem}
+
+\begin{proof}
+由推导 B，GD 极限解在 SVD 坐标下为 $z_k^* = 0$ 当 $k > r$。
+
+对于任意满足 $Xw = y$ 的解 $w$，设其 SVD 坐标为 $z$。由于 $Xw = U\Sigma z = y$，我们有 $\sigma_k z_k = \tilde{y}_k$ 对 $k \leq r$，即 $z_k = \tilde{y}_k/\sigma_k = z_k^*$。
+
+但 $z_k$（$k > r$）可以是任意值。因此：
+\[
+\|w\|_2^2 = \|z\|_2^2 = \sum_{k=1}^{r} (z_k^*)^2 + \sum_{k=r+1}^{d} z_k^2 \geq \sum_{k=1}^{r} (z_k^*)^2 = \|w^*\|_2^2
+\]
+
+等号成立当且仅当 $z_k = 0$ 对所有 $k > r$，即 $w = w^*$。
+\end{proof}
+
+\begin{insight}[GD 是"懒惰"的]
+梯度下降不仅在降低误差，它还在\textbf{走捷径}。从原点出发，它选择了一条最短路径直奔解空间。
+
+\begin{itemize}
+    \item \textbf{显式正则化}：在 Loss 里加 $\lambda\|w\|^2$，强迫解小。
+    \item \textbf{隐式正则化}：什么都不加，但 GD 的动力学本身决定了它偏好小范数解。
+\end{itemize}
+
+这解释了为什么过参数化模型即使没有正则项，也不会随意拟合噪声——因为\textbf{拟合噪声通常需要大范数}。
+\end{insight}
+
+\subsection{深度矩阵分解：更强的隐式正则化}
+
+当我们用多层网络 $W = W_N W_{N-1} \cdots W_1$ 来参数化一个矩阵时，隐式正则化会变得更强。这一节我们从最简单的\textbf{深度2}情况开始推导。
+
+\subsubsection{问题设定}
+
+\begin{blackboard}[矩阵分解问题]
+
+\textbf{目标}：给定目标矩阵 $Y \in \mathbb{R}^{m \times n}$，用低秩分解去拟合它。
+
+\textbf{浅层方法（深度1）}：直接优化
+\[
+\min_{W \in \mathbb{R}^{m \times n}} L(W) = \frac{1}{2}\|W - Y\|_F^2
+\]
+显然最优解就是 $W^* = Y$，没有任何正则化效果。
+
+\textbf{深层方法（深度2）}：用两个矩阵的乘积参数化
+\[
+W = W_2 W_1, \quad W_2 \in \mathbb{R}^{m \times r}, \quad W_1 \in \mathbb{R}^{r \times n}
+\]
+\[
+\min_{W_1, W_2} L(W_1, W_2) = \frac{1}{2}\|W_2 W_1 - Y\|_F^2
+\]
+
+\textbf{问题}：这两种方法有什么本质区别？
+
+\end{blackboard}
+
+\subsubsection{深度2的梯度流分析}
+
+\begin{blackboard}[Step 1：写出梯度]
+
+设残差矩阵 $R = W_2 W_1 - Y$。
+
+对 $W_1$ 的梯度（链式法则）：
+\[
+\frac{\partial L}{\partial W_1} = W_2^\top R = W_2^\top (W_2 W_1 - Y)
+\]
+
+对 $W_2$ 的梯度：
+\[
+\frac{\partial L}{\partial W_2} = R W_1^\top = (W_2 W_1 - Y) W_1^\top
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[Step 2：梯度流方程]
+
+\textbf{离散 GD}：$W_i \leftarrow W_i - \eta \nabla_{W_i} L$
+
+\textbf{梯度流}（连续时间极限，$\eta \to 0$）：
+\[
+\dot{W}_1 = -\frac{\partial L}{\partial W_1} = -W_2^\top (W_2 W_1 - Y)
+\]
+\[
+\dot{W}_2 = -\frac{\partial L}{\partial W_2} = -(W_2 W_1 - Y) W_1^\top
+\]
+
+\textbf{为什么用梯度流？}
+\begin{itemize}
+    \item 分析更干净（微分方程 vs 差分方程）
+    \item 当步长 $\eta$ 很小时，离散 GD 近似梯度流
+    \item 核心结论对离散情况也成立
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[Step 3：$W = W_2 W_1$ 的演化]
+
+我们关心的是\textbf{端到端矩阵} $W = W_2 W_1$ 如何演化。
+
+用乘积法则：
+\begin{align*}
+\dot{W} &= \dot{W}_2 W_1 + W_2 \dot{W}_1 \\
+&= -(W - Y) W_1^\top W_1 - W_2 W_2^\top (W - Y) \\
+&= -(W - Y) W_1^\top W_1 - W_2 W_2^\top (W - Y)
+\end{align*}
+
+记 $A = W_1^\top W_1 \in \mathbb{R}^{r \times r}$（Gram 矩阵），$B = W_2 W_2^\top \in \mathbb{R}^{m \times m}$。
+
+则：
+\[
+\boxed{\dot{W} = -B(W - Y) - (W - Y)A}
+\]
+
+\textbf{对比浅层}：如果直接优化 $W$，梯度流是
+\[
+\dot{W} = -(W - Y)
+\]
+
+深层多了 $A$ 和 $B$ 两个"预条件"矩阵！
+
+\end{blackboard}
+
+\subsubsection{平衡初始化的魔力}
+
+\begin{blackboard}[Step 4：平衡初始化]
+
+\textbf{定义}：称初始化是\textbf{平衡的}（balanced），如果
+\[
+W_1(0)^\top W_1(0) = W_2(0) W_2(0)^\top
+\]
+即 $A(0) = B(0)$（在适当的维度意义下）。
+
+\textbf{关键引理}：平衡性在梯度流下\textbf{保持}！
+
+\textbf{证明}：定义 $\Delta = W_1^\top W_1 - W_2 W_2^\top$（假设 $r = m$ 简化讨论）。
+
+计算 $\dot{\Delta}$：
+\begin{align*}
+\frac{d}{dt}(W_1^\top W_1) &= \dot{W}_1^\top W_1 + W_1^\top \dot{W}_1 \\
+&= -R^\top W_2 W_1 - W_1^\top W_2^\top R \\
+&= -R^\top W - W^\top R
+\end{align*}
+
+类似地：
+\[
+\frac{d}{dt}(W_2 W_2^\top) = -W R^\top - R W^\top
+\]
+
+由于 $R = W - Y$，可以验证：
+\[
+\dot{\Delta} = 0 \quad \text{当 } \Delta(0) = 0
+\]
+
+因此，如果初始化平衡，则\textbf{永远平衡}。
+
+\end{blackboard}
+
+\begin{blackboard}[Step 5：平衡条件下的简化]
+
+设平衡初始化，记 $\Sigma = W_1^\top W_1 = W_2 W_2^\top$。
+
+回到 $W$ 的演化：
+\[
+\dot{W} = -\Sigma(W - Y) - (W - Y)\Sigma = -\{\Sigma, W - Y\}
+\]
+其中 $\{A, B\} = AB + BA$ 是\textbf{反对易子}（anticommutator）。
+
+\textbf{关键}：演化由 $\Sigma$ 调制，而 $\Sigma$ 与 $W$ 的奇异值有关！
+
+\end{blackboard}
+
+\subsubsection{奇异值的演化方程}
+
+\begin{blackboard}[Step 6：用 SVD 分析]
+
+设 $W$ 的 SVD 为 $W = U \text{diag}(\sigma_1, \ldots, \sigma_r) V^\top$。
+
+\textbf{关键观察}：在平衡初始化下，$W_1$ 和 $W_2$ 有相同的奇异值。
+
+设 $W_1 = V_1 \text{diag}(s_1, \ldots, s_r) U_1^\top$，$W_2 = U_2 \text{diag}(t_1, \ldots, t_r) V_2^\top$。
+
+平衡条件 $W_1^\top W_1 = W_2 W_2^\top$ 意味着 $s_i^2 = t_i^2$，即 $s_i = t_i$。
+
+而 $W = W_2 W_1$ 的奇异值满足 $\sigma_i = s_i \cdot t_i = s_i^2$。
+
+因此：
+\[
+\boxed{s_i = \sqrt{\sigma_i}}
+\]
+
+即每个因子矩阵的奇异值是端到端矩阵奇异值的\textbf{平方根}。
+
+\end{blackboard}
+
+\begin{blackboard}[Step 7：推导 $\dot{\sigma}_r$]
+
+设 $Y$ 在 $W$ 的奇异向量基下的投影系数为 $y_r = u_r^\top Y v_r$。
+
+残差在第 $r$ 个奇异方向的分量：
+\[
+u_r^\top (W - Y) v_r = \sigma_r - y_r
+\]
+
+奇异值的梯度流演化（技术细节略）：
+\begin{align*}
+\dot{\sigma}_r &= u_r^\top \dot{W} v_r \\
+&= -u_r^\top \{\Sigma, W - Y\} v_r \\
+&= -2 s_r^2 (\sigma_r - y_r) \\
+&= -2 \sigma_r (\sigma_r - y_r)
+\end{align*}
+
+\textbf{深度2的结论}：
+\[
+\boxed{\dot{\sigma}_r = -2\sigma_r \cdot (\sigma_r - y_r)}
+\]
+
+\textbf{对比浅层}（直接优化 $W$）：
+\[
+\dot{\sigma}_r = -(\sigma_r - y_r)
+\]
+
+深度2多了一个因子 $2\sigma_r$！
+
+\end{blackboard}
+
+\subsubsection{深度带来的低秩偏好}
+
+\begin{blackboard}[Step 8：理解 $\sigma_r$ 因子的效果]
+
+\textbf{浅层} $\dot{\sigma}_r = -(\sigma_r - y_r)$：
+\begin{itemize}
+    \item 所有奇异值以相同速率向目标收敛
+    \item 大的 $\sigma_r$ 和小的 $\sigma_r$ 收敛速度相同
+\end{itemize}
+
+\textbf{深度2} $\dot{\sigma}_r = -2\sigma_r(\sigma_r - y_r)$：
+\begin{itemize}
+    \item 收敛速率被 $\sigma_r$ 调制
+    \item 大的奇异值变化\textbf{更快}
+    \item 小的奇异值变化\textbf{更慢}
+\end{itemize}
+
+\textbf{从零初始化的行为}：
+
+如果 $\sigma_r(0) = 0$（或很小），则 $\dot{\sigma}_r \approx 0$。
+
+小的奇异值\textbf{被"冻结"}了！
+
+这就是\textbf{低秩偏好}：只有已经较大的奇异值才会继续增长，小的奇异值保持接近零。
+
+\end{blackboard}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=12cm, height=5cm,
+        xlabel={训练时间 $t$},
+        ylabel={奇异值 $\sigma_r$},
+        title={浅层 vs 深层的奇异值演化},
+        legend pos=north west,
+        ymin=0, ymax=1.2,
+        xmin=0, xmax=5
+    ]
+        % 浅层：指数收敛，各分量独立
+        \addplot[thick, red, dashed] expression[domain=0:5] {1 - exp(-x)};
+        \addlegendentry{浅层：$\sigma_1(t)$}
+        
+        \addplot[thick, red, dashed, opacity=0.5] expression[domain=0:5] {0.5*(1 - exp(-x))};
+        \addlegendentry{浅层：$\sigma_2(t)$}
+        
+        % 深层：大的先增长
+        \addplot[thick, blue] expression[domain=0:5] {1 - exp(-2*x)};
+        \addlegendentry{深层：$\sigma_1(t)$}
+        
+        \addplot[thick, blue, opacity=0.5] expression[domain=0:5] {0.5*(1 - exp(-0.5*x))};
+        \addlegendentry{深层：$\sigma_2(t)$}
+    \end{axis}
+\end{tikzpicture}
+\caption{深层网络中，大奇异值增长更快，小奇异值被"抑制"。}
+\end{figure}
+
+\subsubsection{推广到深度 $N$}
+
+\begin{blackboard}[深度 $N$ 的结果]
+
+对于深度 $N$ 的分解 $W = W_N W_{N-1} \cdots W_1$：
+
+在平衡初始化下，每个因子的奇异值是 $\sigma_r^{1/N}$。
+
+类似的推导给出：
+\[
+\boxed{\dot{\sigma}_r = -N \cdot \sigma_r^{2-2/N} \cdot (\sigma_r - y_r)}
+\]
+
+\textbf{验证}：
+\begin{itemize}
+    \item $N = 1$（浅层）：$\dot{\sigma}_r = -(\sigma_r - y_r)$ ✓
+    \item $N = 2$：$\dot{\sigma}_r = -2\sigma_r(\sigma_r - y_r)$ ✓
+    \item $N \to \infty$：$\dot{\sigma}_r \propto -\sigma_r^2(\sigma_r - y_r)$
+\end{itemize}
+
+\textbf{物理意义}：指数 $2 - 2/N$ 随深度增加。
+
+深度越大，小奇异值越被抑制，\textbf{低秩偏好越强}。
+
+\end{blackboard}
+
+\begin{keypoint}[隐式正则化的谱系]
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{模型} & \textbf{奇异值演化} & \textbf{隐式偏好} \\
+\midrule
+浅层（$N=1$） & $\dot{\sigma}_r = -(\sigma_r - y_r)$ & 无特殊偏好 \\
+深度2 & $\dot{\sigma}_r = -2\sigma_r(\sigma_r - y_r)$ & 轻微低秩偏好 \\
+深度$N$ & $\dot{\sigma}_r \propto -\sigma_r^{2-2/N}(\sigma_r - y_r)$ & 更强低秩偏好 \\
+深度$\infty$ & $\dot{\sigma}_r \propto -\sigma_r^2(\sigma_r - y_r)$ & 最强低秩偏好 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
+
+\begin{insight}[为什么深度有助于泛化]
+低秩解通常意味着：
+\begin{itemize}
+    \item 更简单的结构
+    \item 更好的压缩
+    \item 更强的泛化能力（类似于隐式的核范数正则化）
+\end{itemize}
+
+深度网络不仅仅是"更多参数"——它们的\textbf{参数化方式}本身就带来了正则化效果！
+\end{insight}
+
+\begin{keypoint}[隐式正则化的谱系]
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{模型} & \textbf{隐式偏好} & \textbf{数学机制} \\
+\midrule
+线性回归 + GD & 最小 $\ell_2$ 范数 & 轨迹在行空间 \\
+深度矩阵分解 & 低秩 & 奇异值动力学 \\
+深度线性网络 & 更稀疏的奇异值 & 深度放大偏好 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
+
+
+%===========================================================
+\section{第二部分：AdaBoost——另一种隐式偏好}
+%===========================================================
+
+第一部分我们看到 GD 在欠定线性回归中偏好最小 $\ell_2$ 范数解，在深度矩阵分解中偏好低秩解。这一节我们看一个完全不同的设定——\textbf{Boosting}——同样的故事在另一种语言下重演：训练误差到零之后，算法继续在做\textbf{margin maximization}。
+
+\subsection{背景：VC 维与经典泛化理论的极限}
+
+在进入 Boosting 算法之前，我们先用 \textbf{VC 维} 把"经典泛化直觉"说精确。这样后面 margin theory 的"反直觉"才有清晰的对照背景——也直接回应了第一部分留下的悬念："为什么经典理论说参数多必过拟合，深度学习却不？"
+
+\begin{definition}[Shattering 与 VC 维]
+对二分类假设类 $\mathcal{H} \subseteq \{h: \mathcal{X} \to \{-1, +1\}\}$：
+
+称 $\mathcal{H}$ \textbf{shatter} 点集 $\{x_1, \ldots, x_d\}$，若对任意标签 $(y_1, \ldots, y_d) \in \{\pm 1\}^d$，存在 $h \in \mathcal{H}$ 使 $h(x_i) = y_i$ 对所有 $i$ 成立。
+
+\textbf{VC 维} $d_{VC}(\mathcal{H})$ 是最大可被 shatter 的点集大小。
+\end{definition}
+
+\textbf{直觉}：VC 维度量假设类的"表达灵活性"——能任意标记多少个点。
+
+\textbf{经典例子}：
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lc}
+\toprule
+\textbf{假设类} & \textbf{VC 维} \\ \midrule
+一维 threshold：$h(x) = \text{sign}(x - \theta)$ & 2 \\
+$\mathbb{R}^d$ 中的线性分类器（仿射超平面） & $d + 1$ \\
+$\mathbb{R}^d$ 中的 axis-aligned 决策桩 & $O(\log d)$ \\
+深度 $h$ 的二叉决策树 & $\Theta(2^h)$ \\
+$W$ 参数的 ReLU 神经网络 & $\tilde{O}(W L)$（深度 $L$）\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{$\mathbb{R}^2$ 直观}：直线分类器能 shatter 任意 3 个非共线点（$2^3 = 8$ 种标签都可实现），但 4 个点的 XOR 标签做不到 → VC 维 $= 3 = d + 1$。
+
+\begin{theorem}[VC 泛化界（Vapnik-Chervonenkis）]
+设 $\mathcal{H}$ 的 VC 维为 $d_{VC}$。则以概率 $\geq 1 - \delta$，对所有 $h \in \mathcal{H}$ 同时成立：
+\[
+\underbrace{\Pr_{\mathcal{D}}[h(x) \neq y]}_{\text{真实测试误差}} \leq \underbrace{\widehat{\mathrm{err}}_n(h)}_{\text{训练误差}} + O\!\left(\sqrt{\frac{d_{VC}\log(n/d_{VC}) + \log(1/\delta)}{n}}\right)
+\]
+\end{theorem}
+
+\subsubsection{证明 sketch}
+
+完整证明会出现在统计学习理论课中，这里给出关键构件，让大家看到 $d_{VC}$ 是如何"涌现"在最终的复杂度项里的。
+
+\begin{blackboard}[VC 界的三步证明]
+
+\textbf{Step 1：单个 $h$ 的集中（Hoeffding）}
+
+对固定 $h$，令 $Z_i = \mathbb{1}[h(x_i) \neq y_i] \in \{0, 1\}$，则 $\widehat{\mathrm{err}}_n(h) = \tfrac{1}{n}\sum Z_i$，$\mathbb{E}[Z_i] = R(h)$（真实误差）。Hoeffding 给出
+\[
+\Pr\!\left[|R(h) - \widehat{\mathrm{err}}_n(h)| > \epsilon\right] \leq 2 e^{-2n\epsilon^2}
+\]
+
+\textbf{问题}：我们要的是\textbf{所有} $h \in \mathcal{H}$ 同时成立的界（uniform convergence），不是单个 $h$。如果 $|\mathcal{H}|$ 有限，union bound 给出 $|\mathcal{H}| \cdot 2 e^{-2n\epsilon^2}$，复杂度项 $\sim \sqrt{\log|\mathcal{H}|/n}$。但典型 $\mathcal{H}$ 是\textbf{无穷大}的（如所有线性分类器），naive union bound 失败。
+
+\textbf{Step 2：把"无穷"换成"在 $n$ 个点上的有效假设数"——growth function}
+
+定义 $\mathcal{H}$ 限制到 $n$ 个点上的\textbf{行为数}：
+\[
+\Pi_{\mathcal{H}}(n) := \max_{x_1, \ldots, x_n} \bigl|\{(h(x_1), \ldots, h(x_n)) : h \in \mathcal{H}\}\bigr| \quad \leq 2^n
+\]
+
+\textbf{关键事实}：在样本上，两个 $h$ 如果给出相同标签向量 $(h(x_1), \ldots, h(x_n))$，它们就\textbf{无法被区分}。所以 union bound 只需对 $\Pi_{\mathcal{H}}(n)$ 个等价类做，不必对整个 $\mathcal{H}$。
+
+\textbf{Sauer-Shelah 引理}（$d_{VC}$ 控制 $\Pi$）：若 $d_{VC}(\mathcal{H}) = d$，则
+\[
+\boxed{\Pi_{\mathcal{H}}(n) \leq \sum_{i=0}^{d}\binom{n}{i} \leq \left(\frac{en}{d}\right)^d}
+\]
+
+\textit{Sauer-Shelah 的归纳证明}：对 $n$ 归纳。设 $\mathcal{H}|_S$ 是 $\mathcal{H}$ 限制到点集 $S = \{x_1, \ldots, x_n\}$。考虑\textbf{把 $x_n$ 移除}得到 $S' = \{x_1, \ldots, x_{n-1}\}$ 上的 $\mathcal{H}|_{S'}$。每个 $\mathcal{H}|_{S'}$ 中的元素，要么对应 $\mathcal{H}|_S$ 中一个元素（$x_n$ 上标签确定），要么对应两个（$x_n$ 上 $\pm 1$ 都可达）。后者意味着这个标签向量在 $S'$ 上还能被"$x_n$ 翻转扩展"——这定义了一个新的假设类 $\mathcal{H}'$，且 $d_{VC}(\mathcal{H}') \leq d - 1$（因为 $\mathcal{H}'$ 在 $S'$ 上 shatter 一组点的话，加上 $x_n$ 就在 $S$ 上 shatter 多一个点）。归纳给出
+\[
+|\mathcal{H}|_S| \leq |\mathcal{H}|_{S'}| + |\mathcal{H}'|_{S'}| \leq \sum_{i \leq d}\binom{n-1}{i} + \sum_{i \leq d-1}\binom{n-1}{i} = \sum_{i \leq d}\binom{n}{i}\,\, \square
+\]
+
+\textit{核心信息}：从 $2^n$（粗）降到 $n^d$（精）——把指数 $n$ 换成多项式 $n^d$。这个多项式增长是 $d_{VC}$ 在最终界中出现的根本原因。
+
+\textbf{Step 3：Symmetrization（用 ghost sample）}
+
+直接对 $\mathcal{H}$ 的所有 $h$ 做 union bound 还是不行——$\Pi_{\mathcal{H}}(n)$ 取决于具体样本，与 $h$ 的真实误差 $R(h)$ 无关，但 Step 1 的 Hoeffding 涉及的是 $R(h)$。\textbf{Symmetrization 技巧}解决这个：
+
+引入与训练样本独立同分布的"ghost sample" $\{(x_i', y_i')\}_{i=1}^n$，记其经验误差为 $\widehat{\mathrm{err}}_n'(h)$。则
+\[
+\Pr\!\left[\sup_{h \in \mathcal{H}} |R(h) - \widehat{\mathrm{err}}_n(h)| > \epsilon\right] \leq 2\,\Pr\!\left[\sup_{h \in \mathcal{H}} |\widehat{\mathrm{err}}_n(h) - \widehat{\mathrm{err}}_n'(h)| > \epsilon/2\right]
+\]
+（直觉：$R(h)$ 与 ghost sample 上的经验误差差不多，所以可以用 ghost 替代。）
+
+右边的 $\sup$ 现在只涉及\textbf{两组样本上的 $2n$ 个点}，$\mathcal{H}$ 在其上的有效行为数 $\leq \Pi_{\mathcal{H}}(2n) \leq (2en/d)^d$。
+
+对每个等价类应用 Hoeffding（双样本版本），union bound：
+\[
+\Pr[\cdot] \leq \Pi_{\mathcal{H}}(2n) \cdot 2e^{-n\epsilon^2/2}
+\]
+
+\textbf{Step 4：合成最终界}
+
+令右边 $\leq \delta$，解出 $\epsilon$：
+\[
+\epsilon = O\!\left(\sqrt{\frac{\log \Pi_{\mathcal{H}}(2n) + \log(1/\delta)}{n}}\right) = O\!\left(\sqrt{\frac{d_{VC}\log(n/d_{VC}) + \log(1/\delta)}{n}}\right)
+\]
+
+这就是 VC 界的复杂度项。\textbf{$d_{VC}$ 通过 Sauer-Shelah 进入界中——它是控制"有效假设数"指数增长率的参数。}
+
+\end{blackboard}
+
+\begin{insight}[VC 界的本质]
+VC 界本质上是在做：
+
+\textit{"无限假设类$\mathcal{H}$ 在 $n$ 个样本上 effectively 看起来只有 $\Pi_{\mathcal{H}}(n)$ 个不同的分类器"}
+
+加上 union bound + Hoeffding 就得到了泛化界。VC 维通过 Sauer-Shelah 给出 $\Pi_{\mathcal{H}}(n) \leq (en/d_{VC})^{d_{VC}}$，这就是为什么界中出现 $d_{VC} \log n$。
+\end{insight}
+
+\textbf{标准叙事}（深度学习时代之前的主流观点）：
+\begin{itemize}
+    \item 模型容量 $\leftrightarrow$ VC 维
+    \item 容量越大 → 第二项（"复杂度惩罚"）越大
+    \item 训练误差为 0 + 大容量 → 上界宽松甚至 \textbf{vacuous}（$\geq 1$，毫无信息）→ 预测过拟合
+\end{itemize}
+
+\textbf{VC 视角对 Boosting 的预测}
+
+经过 $T$ 轮 boosting，组合假设类
+\[
+\mathcal{F}_T = \left\{\,\text{sign}\!\Bigl(\textstyle\sum_{t=1}^T \alpha_t h_t\Bigr) : \alpha_t \in \mathbb{R}, h_t \in \mathcal{H}\,\right\}
+\]
+的 VC 维满足（Freund-Schapire 1997）
+\[
+d_{VC}(\mathcal{F}_T) = O\bigl(T \cdot d_{VC}(\mathcal{H}) \cdot \log T\bigr)
+\]
+
+\textbf{关键预测}：$T$ 越大，VC 维近似线性增长 → 复杂度惩罚 $\to \infty$ → \textbf{应当过拟合}。
+
+\begin{insight}[即将出现的矛盾]
+但 Schapire et al.\ (1998) 的实验给出截然相反的结果：训练 $T = 10000$ 轮（远超训练误差为 0 的轮数 $T_0 \approx 5\text{--}100$），测试误差仍在\textbf{单调下降}。VC 视角对此完全无法解释。
+
+接下来我们会看到，决定 boosting 泛化性能的不是 $T$，而是\textbf{margin}：模型的"有效复杂度"由 $1/\theta^2$（margin 倒数平方）控制，\textbf{与 $T$ 无关}。
+
+这正是第一部分故事的另一面：\textbf{算法本身在做隐式正则化}，而 VC 维作为单一标量太粗糙，捕捉不到这种"算法相关"的复杂度。
+
+\textbf{深度学习版本的同一悖论}：百亿参数大模型 VC 维巨大，按 VC 界预测应严重过拟合，但实际测试性能很好。这个悖论与 boosting 1998 年的悖论是\textbf{同一个数学事实在两个时代的化身}。
+\end{insight}
+
+\subsection{弱学习器能否变强？}
+
+\textbf{动机问题}（Kearns-Valiant 1988）：
+
+设 $\mathcal{H}$ 是一个"弱"假设类——存在算法能找到比随机略好的分类器（错误率 $\epsilon < 1/2 - \gamma$，$\gamma > 0$）。能否将多个弱学习器组合成一个\textbf{强分类器}（任意小错误率）？
+
+Schapire (1990) 给出了肯定回答，AdaBoost (Freund-Schapire 1997) 是最简单的实现。
+
+\subsection{AdaBoost 算法}
+
+\begin{algorithm}
+\caption{AdaBoost}
+\begin{algorithmic}[1]
+\STATE 输入：训练集 $\{(x_i, y_i)\}_{i=1}^n$，$y_i \in \{-1, +1\}$；弱学习器类 $\mathcal{H}$；轮数 $T$
+\STATE 初始化权重：$w_i^{(1)} = 1/n$
+\FOR{$t = 1, 2, \ldots, T$}
+    \STATE 在加权数据上训练弱学习器：$h_t \in \arg\min_{h \in \mathcal{H}} \sum_i w_i^{(t)} \mathbb{1}[h(x_i) \neq y_i]$
+    \STATE 计算加权错误率：$\epsilon_t = \sum_i w_i^{(t)} \mathbb{1}[h_t(x_i) \neq y_i]$
+    \STATE 计算权重：$\alpha_t = \frac{1}{2}\log\frac{1-\epsilon_t}{\epsilon_t}$
+    \STATE 更新样本权重：$w_i^{(t+1)} \propto w_i^{(t)} \exp(-y_i \alpha_t h_t(x_i))$
+\ENDFOR
+\STATE 输出：$F_T(x) = \sum_{t=1}^{T} \alpha_t h_t(x)$，分类器 $\text{sign}(F_T)$
+\end{algorithmic}
+\end{algorithm}
+
+第一眼看这个算法，权重更新规则、$\alpha_t$ 公式都像是"魔术"。我们接下来用一个推导让它\textbf{自然涌现}——AdaBoost 就是函数空间里的坐标下降。
+
+\subsection{核心推导：AdaBoost = 指数损失上的坐标下降}
+
+\begin{blackboard}[完整推导：从指数损失到 AdaBoost]
+
+\textbf{Step 1：定义指数损失}
+
+\[
+L(F) = \sum_{i=1}^{n} \exp(-y_i F(x_i))
+\]
+
+直觉：当 $y_i F(x_i) > 0$（分类正确且 margin 大）时，该样本贡献小；分类错误时贡献大且呈指数。这是 \textbf{0-1 损失的凸 surrogate}。
+
+\textbf{Step 2：贪婪坐标下降}
+
+我们想构造 $F = \sum_t \alpha_t h_t$，每轮加一个基函数 $\alpha h$ 来最小化 $L$。
+
+设当前为 $F_{t-1}$，下一步最优化：
+\[
+(\alpha_t, h_t) = \arg\min_{\alpha \in \mathbb{R},\, h \in \mathcal{H}} L(F_{t-1} + \alpha h)
+\]
+
+展开：
+\begin{align*}
+L(F_{t-1} + \alpha h) &= \sum_i e^{-y_i F_{t-1}(x_i)} \cdot e^{-y_i \alpha h(x_i)} \\
+&= \sum_i w_i^{(t)} \cdot e^{-y_i \alpha h(x_i)}
+\end{align*}
+其中我们\textbf{定义}权重 $w_i^{(t)} = e^{-y_i F_{t-1}(x_i)}$——它\textbf{自然涌现}于损失的链式分解！
+
+\textbf{Step 3：对二值 $h(x_i) \in \{-1, +1\}$ 化简}
+
+对每个样本，$y_i h(x_i) = +1$ 当 $h$ 分类正确，$= -1$ 当错误。设
+\[
+\epsilon = \frac{\sum_{i: h(x_i) \neq y_i} w_i^{(t)}}{\sum_i w_i^{(t)}} \quad \text{（加权错误率）}
+\]
+
+把 $W = \sum_i w_i^{(t)}$ 提出来：
+\[
+L(F_{t-1} + \alpha h) = W \left[(1-\epsilon)\, e^{-\alpha} + \epsilon\, e^{+\alpha}\right]
+\]
+
+\textbf{Step 4：对 $\alpha$ 一维线搜索}
+
+对 $\alpha$ 求导并令其为 0：
+\[
+-(1-\epsilon)e^{-\alpha} + \epsilon e^{+\alpha} = 0 \implies e^{2\alpha^*} = \frac{1-\epsilon}{\epsilon}
+\]
+\[
+\boxed{\alpha^* = \frac{1}{2}\log\frac{1-\epsilon}{\epsilon}}
+\]
+
+这就是 AdaBoost 的 $\alpha_t$ 公式！它\textbf{不是公理}，是指数损失下的精确一维最优。
+
+\textbf{Step 5：最优 $h$ 是最小 $\epsilon$ 的弱学习器}
+
+代回 $\alpha^*$：
+\[
+L^*(\epsilon) = W \cdot 2\sqrt{\epsilon(1-\epsilon)}
+\]
+
+这关于 $\epsilon$ 是 \textbf{$\epsilon = 1/2$ 时最大}（无信息），\textbf{$\epsilon = 0$ 时最小}。所以选 $h$ 时要\textbf{最小化加权错误率}——这就是"在加权数据上训练弱学习器"。
+
+\textbf{Step 6：权重更新规则自然涌现}
+
+\begin{align*}
+w_i^{(t+1)} &= e^{-y_i F_t(x_i)} \\
+&= e^{-y_i F_{t-1}(x_i)} \cdot e^{-y_i \alpha_t h_t(x_i)} \\
+&= w_i^{(t)} \cdot e^{-y_i \alpha_t h_t(x_i)}
+\end{align*}
+
+具体来说：
+\begin{itemize}
+\item 分类\textbf{正确}（$y_i h_t = +1$）：$w_i^{(t+1)} = w_i^{(t)} e^{-\alpha_t} = w_i^{(t)}\sqrt{\epsilon_t/(1-\epsilon_t)}$，权重\textbf{下降}
+\item 分类\textbf{错误}（$y_i h_t = -1$）：$w_i^{(t+1)} = w_i^{(t)} e^{+\alpha_t} = w_i^{(t)}\sqrt{(1-\epsilon_t)/\epsilon_t}$，权重\textbf{上升}
+\end{itemize}
+
+这就是 AdaBoost 完整算法。\textbf{从一个凸损失上的坐标下降出发，所有"算法细节"都被推出来。}
+
+\end{blackboard}
+
+\begin{keypoint}[AdaBoost 的本质]
+AdaBoost 是\textbf{函数空间中的贪婪坐标下降}：
+
+\begin{itemize}
+    \item 函数空间：$\mathcal{F} = \text{span}(\mathcal{H})$
+    \item 坐标方向：每个弱学习器 $h \in \mathcal{H}$ 是一个坐标
+    \item 损失：指数损失 $L(F) = \sum_i e^{-y_i F(x_i)}$（凸！）
+    \item 每轮：选一个坐标方向（最优 $h$）+ 一维线搜索（最优 $\alpha$）
+\end{itemize}
+
+这个视角揭示：AdaBoost 不需要"魔法"，它就是凸优化在函数空间的体现。
+\end{keypoint}
+
+\subsection{训练误差的指数收敛}
+
+\begin{blackboard}[训练误差上界（Schapire-Freund）]
+
+由 Step 5：每轮 $L \to L \cdot 2\sqrt{\epsilon_t(1-\epsilon_t)}$。
+
+由 $\mathbb{1}[u \leq 0] \leq e^{-u}$（指数函数 $\geq$ 阶跃函数），有
+\[
+n \cdot \text{train err}(F_T) = \sum_i \mathbb{1}[y_i F_T(x_i) \leq 0] \leq \sum_i e^{-y_i F_T(x_i)} = L_T
+\]
+
+所以：
+\[
+\text{train err}(F_T) \leq \frac{L_T}{n} = \prod_{t=1}^{T} 2\sqrt{\epsilon_t(1-\epsilon_t)}
+\]
+
+定义 \textbf{edge}：$\gamma_t = 1/2 - \epsilon_t > 0$（弱学习假设）。则
+\[
+2\sqrt{\epsilon_t(1-\epsilon_t)} = \sqrt{1 - 4\gamma_t^2}
+\]
+
+如果所有 $\gamma_t \geq \gamma > 0$：
+\[
+\boxed{\text{train err}(F_T) \leq (1 - 4\gamma^2)^{T/2} \leq e^{-2\gamma^2 T}}
+\]
+
+\textbf{结论}：只要每个弱学习器比随机略好（$\gamma > 0$），训练误差\textbf{指数衰减}到 0。
+
+\end{blackboard}
+
+\subsection{关键洞察：训练误差到 0 后会发生什么？}
+
+\begin{insight}[反直觉的实验观察]
+经典 VC 理论预测：模型容量足够大、训练误差到 0 后，继续训练应该\textbf{过拟合}。
+
+\textbf{但 Schapire (1998) 观察}：AdaBoost 训练误差达到 0 后（通常很早），\textbf{测试误差仍在下降}！甚至在 $T = 10000$ 轮以后，测试误差还能进一步降低。
+
+\textbf{这看起来违反了 Occam's razor。怎么解释？}
+\end{insight}
+
+\textbf{答案是 margin theory}——和我们第一部分的"训练误差为 0 后 GD 继续降低 $\|w\|$"是同一个故事。
+
+\subsubsection{Margin 的定义}
+
+对样本 $(x, y)$，归一化 margin 定义为：
+\[
+\rho(x, y; F) = \frac{y \cdot F(x)}{\|\bm{\alpha}\|_1} = \frac{y \cdot \sum_t \alpha_t h_t(x)}{\sum_t |\alpha_t|}
+\]
+
+这个量 $\in [-1, 1]$：
+\begin{itemize}
+\item $\rho > 0$：分类正确，$\rho$ 越大越自信
+\item $\rho < 0$：分类错误
+\item 0-1 损失只关心 $\rho$ 的\textbf{符号}，但泛化与 $\rho$ 的\textbf{大小}相关
+\end{itemize}
+
+\subsubsection{关键事实：AdaBoost 持续提升 margin}
+
+\begin{theorem}[Schapire-Freund-Bartlett-Lee 1998]
+即使训练误差已经为 0，AdaBoost 继续运行会\textbf{单调提升 margin 分布}：对任意 $\theta < \gamma$（$\gamma$ 是弱学习器的 edge），
+\[
+\Pr_n[\rho(x_i, y_i; F_T) \leq \theta] \to 0 \quad \text{as } T \to \infty
+\]
+其中 $\Pr_n$ 是经验分布。
+
+进而\textbf{margin-based 泛化界}：
+\[
+\Pr_{\mathcal{D}}[y F(x) \leq 0] \leq \Pr_n[\rho(x, y) \leq \theta] + \tilde{O}\!\left(\sqrt{\frac{\mathrm{VC}(\mathcal{H})}{n\,\theta^2}}\right)
+\]
+\end{theorem}
+
+\textbf{重点}：右边的复杂度项与训练轮数 $T$ \textbf{无关}！只取决于 margin $\theta$ 和\textbf{基础}弱学习器类的 VC 维 $d_{VC}(\mathcal{H})$——这就是为什么 AdaBoost 跑很久也不过拟合。
+
+\textbf{与 VC 界的精确对照}：把上面这条 margin 界与开头给出的 VC 界并列，区别一目了然：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{ll}
+\toprule
+\textbf{VC 界（Freund-Schapire 1997）} & 复杂度项 $\sim \sqrt{T \cdot d_{VC}(\mathcal{H}) \log T / n}$ \\
+\textbf{Margin 界（SFBL 1998）} & 复杂度项 $\sim \sqrt{d_{VC}(\mathcal{H}) / (n \theta^2)}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{差别}：$T$ 被 $1/\theta^2$ \textbf{替代}。后者随 $T$ 增大\textbf{不变甚至变好}（因为 margin $\theta$ 在持续增长）。这就解决了开头的悖论——VC 界只是上界中的一种，并不是最紧的；margin 界对同一个分类器给出更紧的界。
+
+\begin{keypoint}[第三个隐式偏好]
+我们已经见过两个隐式偏好，现在加上第三个：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lll}
+\toprule
+\textbf{设定} & \textbf{算法} & \textbf{隐式偏好} \\ \midrule
+线性回归（$d > n$）& GD from $w_0=0$ & 最小 $\ell_2$ 范数 \\
+深度矩阵分解 & GD from 平衡初始化 & 低秩 \\
+AdaBoost 二分类 & 指数损失上的坐标下降 & 最大 $\ell_1$-margin \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{统一观察}：这些算法都能\textbf{超出训练误差为 0 的阶段}，继续向某种"简单"解收敛。\textbf{优化算法本身在做正则化}——这就是为什么过参数化不一定过拟合。
+\end{keypoint}
+
+\subsection{Frank-Wolfe 视角}
+
+把 AdaBoost 与凸优化经典算法 \textbf{Frank-Wolfe}（条件梯度法）联系起来，能更深刻理解它的隐式偏好。
+
+\begin{blackboard}[AdaBoost 作为 $\ell_1$ 球上的 Frank-Wolfe]
+
+\textbf{Frank-Wolfe 算法}（一般形式）：
+对约束凸优化 $\min_{x \in C} f(x)$（$C$ 为有界凸集），每步：
+\begin{enumerate}
+\item $s_t = \arg\min_{s \in C} \langle \nabla f(x_t), s\rangle$ \quad（线性最小化 oracle）
+\item $x_{t+1} = (1-\gamma_t) x_t + \gamma_t s_t$
+\end{enumerate}
+
+\textbf{应用到 boosting 设定}：
+
+考虑约束集 $C = B \cdot \text{conv}(\mathcal{H} \cup -\mathcal{H})$（$B$ 倍的 $\ell_1$ 球）。
+
+线性最小化在凸包顶点取到：
+\[
+\arg\min_{F \in C} \langle \nabla L(F_t), F \rangle = \pm B \cdot h^*
+\]
+其中 $h^* = \arg\max_{h \in \mathcal{H}} \left|\sum_i w_i^{(t)} y_i h(x_i)\right|$
+\quad = 最优弱学习器（最小化加权错误率）。
+
+\textbf{隐式偏好的来源}：$\ell_1$ 球的极点（vertex）是\textbf{坐标方向}（$\pm B \cdot e_h$），所以 Frank-Wolfe \textbf{倾向于稀疏组合}。
+
+这就是 boosting 的"$\ell_1$ regularization for free"——不需要写 $\lambda \|\bm{\alpha}\|_1$，算法本身就会选稀疏组合。
+
+\textbf{对偶视角}（Telgarsky 2013）：AdaBoost 的极限对偶问题是
+\[
+\max_{F: \|F\|_{\mathcal{H}_1} = 1} \min_i y_i F(x_i)
+\]
+这正是 \textbf{$\ell_1$-margin 最大化}。
+\end{blackboard}
+
+\subsection{推广：梯度提升}
+
+Friedman (2001) 把这套观点推广到任意可微损失：
+
+\begin{blackboard}[Gradient Boosting]
+
+对一般损失 $L(y, F(x))$（如平方损失、log loss、Huber loss），每轮：
+\begin{enumerate}
+\item 计算"伪残差"（函数空间负梯度）：
+\[
+r_i^{(t)} = -\left.\frac{\partial L(y_i, F)}{\partial F}\right|_{F=F_{t-1}(x_i)}
+\]
+\item 训练 $h_t \approx r^{(t)}$（用回归弱学习器拟合伪残差，相当于把负梯度向 $\mathcal{H}$ 投影）
+\item 一维线搜索：$\alpha_t = \arg\min_\alpha \sum_i L(y_i, F_{t-1}(x_i) + \alpha h_t(x_i))$
+\item 更新：$F_t = F_{t-1} + \alpha_t h_t$
+\end{enumerate}
+
+\textbf{解释}：\textbf{函数空间中沿负梯度方向投影到 $\mathcal{H}$ 的最近邻}。
+
+\textbf{特例}：
+\begin{itemize}
+\item \textbf{平方损失}：伪残差 $r_i = y_i - F_{t-1}(x_i)$（普通残差）
+\item \textbf{指数损失}（二分类）：还原 AdaBoost
+\item \textbf{Logistic loss}：LogitBoost（Friedman-Hastie-Tibshirani 2000）
+\end{itemize}
+
+\end{blackboard}
+
+\subsection{现代实践：XGBoost}
+
+XGBoost (Chen-Guestrin 2016) 是梯度提升的现代实现，关键改进：
+\begin{itemize}
+\item \textbf{二阶信息}：用 Newton 步而非梯度步（$h_t \approx -\nabla L / \nabla^2 L$）
+\item \textbf{显式正则化}：在树结构上加 $\lambda \|h\|^2 + \gamma |\text{leaves}(h)|$
+\item \textbf{近似贪婪分裂}：稀疏感知、并行化
+\end{itemize}
+
+XGBoost 在表格数据上至今仍是 SOTA，是\textbf{深度学习未能征服的领域}。这本身值得反思：在某些数据分布下，\textbf{显式 + 隐式正则化的组合}可能优于深度网络的端到端学习。
+
+\subsection{与深度学习的对比}
+
+\begin{insight}[两种范式的深层联系]
+\textbf{Boosting}：在固定的弱学习器空间 $\mathcal{H}$ 中做加权组合，\textbf{特征空间不变}。
+
+\textbf{深度学习}：通过梯度下降\textbf{学习特征表示}，特征空间在演化。
+
+但两者共享深刻的相似性：
+\begin{itemize}
+\item 都依靠\textbf{隐式正则化}（max margin / min norm / low rank）
+\item 都在\textbf{超出经典容量界限}时表现良好
+\item 都依靠某种\textbf{贪婪/局部}更新（一次一个 weak learner / 一次一步 GD）
+\end{itemize}
+
+理解 boosting 的隐式偏好让我们对深度学习的隐式偏好有了更深的概念框架。\textbf{margin maximization 不是 boosting 独有，而是凸 surrogate loss + 贪婪优化的普遍现象}（Soudry et al. 2018 在 logistic regression 上的工作正是这一思想在线性模型上的体现）。
+\end{insight}
+
+
+%===========================================================
+\section{第三部分：高维临界点统计}
+%===========================================================
+
+\subsection{问题：为什么 SGD 不会卡住？}
+
+非凸函数有大量临界点（满足 $\nabla f = 0$ 的点）。它们可以是：
+\begin{itemize}
+    \item \textbf{局部极小值}：所有方向向上弯曲
+    \item \textbf{局部极大值}：所有方向向下弯曲
+    \item \textbf{鞍点}：有些方向向上，有些向下
+\end{itemize}
+
+\textbf{核心问题}：在神经网络的 loss landscape 中，哪种临界点占主导？
+
+\subsection{低维直觉是错误的}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=7cm, height=5.5cm,
+        xlabel=$x$, ylabel=$y$, zlabel=$f$,
+        title={2D 鞍点：$f = x^2 - y^2$},
+        view={120}{30},
+        colormap/viridis
+    ]
+        \addplot3[surf, domain=-2:2, samples=25, opacity=0.8] {x^2 - y^2};
+        \addplot3[only marks, mark=*, mark size=3pt, color=red] coordinates {(0,0,0)};
+    \end{axis}
+\end{tikzpicture}
+\caption{二维鞍点：一个方向凸，一个方向凹。在低维空间，这种"平衡"看起来很特殊。}
+\end{figure}
+
+在 2D 或 3D 中，我们的直觉是：
+\begin{itemize}
+    \item 极小值和极大值是"常见"的
+    \item 鞍点是"特殊"的（需要曲率正好平衡）
+\end{itemize}
+
+\textbf{但在高维空间，情况完全相反！}
+
+\subsection{随机矩阵理论：Wigner 半圆律}
+
+为了理解高维临界点，我们需要一点随机矩阵理论。
+
+\begin{theorem}[Wigner 半圆律]
+设 $H$ 是 $d \times d$ 的随机对称矩阵，其上三角元素独立同分布，均值为 0，方差为 $\sigma^2/d$。当 $d \to \infty$ 时，$H$ 的特征值经验分布收敛到\textbf{半圆分布}：
+\[
+\rho(\lambda) = \frac{1}{2\pi\sigma^2}\sqrt{4\sigma^2 - \lambda^2}, \quad \lambda \in [-2\sigma, 2\sigma]
+\]
+\end{theorem}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=10cm, height=5cm,
+        xlabel={特征值 $\lambda$},
+        ylabel={密度 $\rho(\lambda)$},
+        title={Wigner 半圆分布（$\sigma=1$）},
+        domain=-2:2,
+        samples=100,
+        ymin=0, ymax=0.4,
+        axis lines=middle,
+        xtick={-2, -1, 0, 1, 2},
+        ytick={0.1, 0.2, 0.3},
+        grid=major
+    ]
+        \addplot[thick, myblue, fill=myblue!20] {sqrt(4-x^2)/(2*pi)};
+        \addplot[dashed, red, thick] coordinates {(0,0) (0,0.35)};
+        \node at (axis cs: 0, 0.38) {$\lambda = 0$};
+        
+        % 标注正负区域
+        \fill[green!30, opacity=0.5] (axis cs: 0, 0) -- plot[domain=0:2] (\x, {sqrt(4-\x^2)/(2*pi)}) -- (axis cs: 2, 0) -- cycle;
+        \fill[red!30, opacity=0.5] (axis cs: -2, 0) -- plot[domain=-2:0] (\x, {sqrt(4-\x^2)/(2*pi)}) -- (axis cs: 0, 0) -- cycle;
+        
+        \node[font=\small] at (axis cs: 1, 0.15) {$\lambda > 0$};
+        \node[font=\small] at (axis cs: -1, 0.15) {$\lambda < 0$};
+    \end{axis}
+\end{tikzpicture}
+\caption{半圆分布：特征值在 $[-2, 2]$ 对称分布，正负各占约一半。}
+\end{figure}
+
+\subsection{从网络对称性理解 Loss Landscape}
+
+理解神经网络 loss landscape 最干净的视角是：直接从\textbf{神经网络的对称性}推出其结构。这套论证不依赖任何数据分布假设，也不需要把 NN 类比到统计物理模型上——结论纯粹来自网络结构本身。
+
+\begin{mathbox}[核心思想]
+神经网络有大量\textbf{置换对称性}：交换两个神经元的权重，网络输出不变。
+
+这意味着：
+\begin{itemize}
+    \item 如果 $\theta^*$ 是一个极小值，那么所有置换后的 $P\theta^*$ 也是极小值
+    \item 这些等价的极小值之间必然由\textbf{鞍点}连接
+    \item Loss landscape 的结构由对称性\textbf{完全决定}，与数据分布无关！
+\end{itemize}
+\end{mathbox}
+
+\subsection{神经元置换对称性}
+
+\begin{blackboard}[最简单的例子：单隐层网络]
+
+考虑一个单隐层网络，$m$ 个隐藏神经元：
+\[
+f(x; W, v) = \sum_{j=1}^{m} v_j \cdot \sigma(w_j^\top x)
+\]
+
+其中 $w_j \in \mathbb{R}^d$ 是第 $j$ 个隐藏神经元的输入权重，$v_j \in \mathbb{R}$ 是输出权重。
+
+\textbf{关键观察}：如果我们\textbf{交换}第 $i$ 个和第 $j$ 个神经元，即
+\[
+(w_i, v_i) \leftrightarrow (w_j, v_j)
+\]
+网络的输出\textbf{完全不变}！（因为求和可交换）
+
+\textbf{推论}：对于任意 $m$ 个神经元的排列 $\pi \in S_m$，定义置换后的参数
+\[
+\theta^\pi = (w_{\pi(1)}, v_{\pi(1)}, \ldots, w_{\pi(m)}, v_{\pi(m)})
+\]
+则 $f(x; \theta) = f(x; \theta^\pi)$，因此 $L(\theta) = L(\theta^\pi)$。
+
+\end{blackboard}
+
+\begin{keypoint}[对称性带来的极小值数量]
+如果 $\theta^*$ 是一个全局最小值，那么 $\theta^*$ 的所有 $m!$ 个置换都是全局最小值！
+
+\begin{itemize}
+    \item $m = 10$：$10! = 3,628,800$ 个等价极小值
+    \item $m = 100$：$100! \approx 10^{158}$ 个等价极小值
+\end{itemize}
+
+这些极小值在参数空间中是\textbf{离散}的不同点，但它们的 loss 值完全相同。
+\end{keypoint}
+
+\subsection{定量分析：有多少鞍点？}
+
+现在我们来精确计算鞍点的数量。
+
+\begin{blackboard}[从对称群到鞍点计数]
+
+\textbf{置换群的结构}
+
+$m$ 个神经元的置换群是 $S_m$，它有 $m!$ 个元素。
+
+群 $S_m$ 可以由\textbf{相邻对换}生成：
+\[
+S_m = \langle \tau_{12}, \tau_{23}, \ldots, \tau_{(m-1)m} \rangle
+\]
+其中 $\tau_{ij}$ 表示交换第 $i$ 和第 $j$ 个神经元。
+
+\textbf{Cayley 图的视角}
+
+把每个等价极小值 $\theta^\pi$ 看作图的一个顶点，如果两个顶点通过一次相邻对换连接，就画一条边。
+
+这就是置换群 $S_m$ 关于相邻对换生成元的 \textbf{Cayley 图}。
+
+\textbf{关键事实}：
+\begin{itemize}
+    \item 顶点数 = $m!$（等价极小值的数量）
+    \item 每个顶点的度数 = $m-1$（可以做 $m-1$ 种相邻对换）
+    \item 边数 = $\frac{m! \cdot (m-1)}{2}$（每条边连接两个顶点）
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[每条边对应一个鞍点]
+
+\textbf{核心论证}：
+
+考虑两个相邻的等价极小值 $\theta^*$ 和 $\tau_{ij}\theta^*$（只交换神经元 $i$ 和 $j$）。
+
+它们在参数空间中是\textbf{不同的点}，但 loss 值相同。
+
+连接它们的路径上，loss 必须先升后降（否则违反极小值定义）。
+
+因此路径上至少有一个\textbf{index-1 鞍点}（恰好一个负特征值方向）。
+
+\textbf{鞍点数量的下界}：
+\[
+\#\{\text{index-1 鞍点}\} \geq \frac{m!(m-1)}{2}
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[更高 index 的鞍点]
+
+不仅有 index-1 鞍点，还有更高 index 的鞍点！
+
+\textbf{考虑同时交换多对神经元}：
+
+设 $\theta^*$ 是极小值，考虑置换 $\pi = \tau_{12} \tau_{34}$（同时交换 1-2 和 3-4）。
+
+从 $\theta^*$ 到 $\pi\theta^*$ 的"直接"路径上，有一个 \textbf{index-2 鞍点}。
+
+\textbf{一般规律}：
+
+同时交换 $k$ 对不相交的神经元，对应一个 \textbf{index-$k$ 鞍点}。
+
+最多可以同时交换 $\lfloor m/2 \rfloor$ 对，所以存在高达 index-$\lfloor m/2 \rfloor$ 的鞍点。
+
+\end{blackboard}
+
+\begin{blackboard}[精确计数：index-$k$ 鞍点的数量]
+
+\textbf{问题}：有多少种方式选择 $k$ 对不相交的神经元进行交换？
+
+\textbf{组合计数}：
+
+从 $m$ 个神经元中选 $k$ 对不相交的：
+\[
+N_k = \frac{1}{k!} \binom{m}{2} \binom{m-2}{2} \cdots \binom{m-2k+2}{2} = \frac{m!}{2^k k! (m-2k)!}
+\]
+
+这是选择 $k$ 个不相交对换的方式数。
+
+\textbf{index-$k$ 鞍点数量}：
+\[
+\#\{\text{index-}k \text{ 鞍点}\} = m! \cdot N_k / |\text{稳定子}|
+\]
+
+对于"一般位置"的极小值，稳定子是平凡的，所以：
+\[
+\#\{\text{index-}k \text{ 鞍点}\} \approx \frac{(m!)^2}{2^k k! (m-2k)!}
+\]
+
+\end{blackboard}
+
+\begin{keypoint}[鞍点 vs 极小值的数量对比]
+
+\textbf{极小值数量}（来自对称性）：
+\[
+\#\{\text{等价极小值}\} = m!
+\]
+
+\textbf{index-1 鞍点数量}：
+\[
+\#\{\text{index-1 鞍点}\} \approx \frac{m!(m-1)}{2}
+\]
+
+\textbf{比值}：
+\[
+\frac{\#\{\text{index-1 鞍点}\}}{\#\{\text{极小值}\}} = \frac{m-1}{2}
+\]
+
+\textbf{数值例子}（$m = 100$ 个隐藏神经元）：
+\begin{itemize}
+    \item 极小值：$100! \approx 10^{158}$ 个
+    \item index-1 鞍点：$\approx 50 \times 100! \approx 5 \times 10^{159}$ 个
+    \item 鞍点比极小值多 $\approx 50$ 倍！
+\end{itemize}
+
+而且这还只是 index-1 的鞍点，加上所有 index 的鞍点，比例更悬殊。
+
+\end{keypoint}
+
+\subsection{基于对称性的概率论证}
+
+\begin{blackboard}[从计数到概率]
+
+\textbf{问题}：随机采样一个临界点，它是极小值的概率是多少？
+
+\textbf{基于对称性的论证}：
+
+设 loss landscape 中（由对称性产生的）临界点总数为：
+\[
+\#\{\text{临界点}\} = \#\{\text{极小值}\} + \sum_{k=1}^{\lfloor m/2 \rfloor} \#\{\text{index-}k \text{ 鞍点}\}
+\]
+
+\textbf{计算总鞍点数}：
+\begin{align*}
+\sum_{k=1}^{\lfloor m/2 \rfloor} N_k &= \sum_{k=1}^{\lfloor m/2 \rfloor} \frac{m!}{2^k k! (m-2k)!} \\
+&\approx m! \sum_{k=1}^{\lfloor m/2 \rfloor} \frac{1}{2^k k!} \quad \text{（当 $m$ 大时）}
+\end{align*}
+
+注意到 $\sum_{k=0}^{\infty} \frac{1}{2^k k!} = e^{1/2} \approx 1.65$，所以：
+\[
+\sum_{k=1}^{\lfloor m/2 \rfloor} N_k \approx m! \cdot (e^{1/2} - 1) \approx 0.65 \cdot m!
+\]
+
+\textbf{结论}：
+\[
+P(\text{临界点是极小值}) = \frac{m!}{m! + 0.65 \cdot m! \cdot m!} \approx \frac{1}{0.65 \cdot m!}
+\]
+
+当 $m = 100$ 时，这个概率 $\approx 10^{-158}$！
+
+\end{blackboard}
+
+\begin{insight}[对称性论证的力量]
+这个论证有几个值得强调的特点：
+
+\begin{itemize}
+    \item \textbf{结构性}：只用了网络的置换对称性 $S_m$，没有用任何数据分布假设
+    \item \textbf{可精确计算}：$m!$ 个等价极小值是\textbf{精确的}（不是渐近近似）
+    \item \textbf{鞍点比极小值多 $O(m!)$ 倍}：当 $m$ 不太小时这是天文数字
+\end{itemize}
+
+\textbf{警示}：对称性只能解释"对称产生的"鞍点，并不排除其他来源的鞍点（数据相关的、激活函数引入的等）。但仅这一类来源就已足够说明在过参数化网络中，鞍点是\textbf{结构性必然}，而非"运气不好"才碰到的特殊情况。
+\end{insight}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % 示意图：S_3 的 Cayley 图
+    \node[font=\small\bfseries] at (3, 4.5) {$S_3$ 的 Cayley 图（$m=3$ 个神经元）};
+    
+    % 6个顶点（极小值）
+    \foreach \i/\label/\x/\y in {
+        1/{123}/0/2,
+        2/{213}/2/3.5,
+        3/{132}/2/0.5,
+        4/{312}/4/3.5,
+        5/{231}/4/0.5,
+        6/{321}/6/2
+    } {
+        \fill[red] (\x, \y) circle (4pt);
+        \node[font=\tiny] at (\x, \y-0.4) {$\label$};
+    }
+    
+    % 边（index-1 鞍点）
+    \draw[thick, orange] (0,2) -- (2,3.5); % 123-213
+    \draw[thick, orange] (0,2) -- (2,0.5); % 123-132
+    \draw[thick, orange] (2,3.5) -- (4,3.5); % 213-312
+    \draw[thick, orange] (2,3.5) -- (4,0.5); % 213-231
+    \draw[thick, orange] (2,0.5) -- (4,3.5); % 132-312
+    \draw[thick, orange] (2,0.5) -- (4,0.5); % 132-231
+    \draw[thick, orange] (4,3.5) -- (6,2); % 312-321
+    \draw[thick, orange] (4,0.5) -- (6,2); % 231-321
+    \draw[thick, orange] (0,2) to[bend left=40] (6,2); % 123-321
+    
+    % 图例
+    \fill[red] (8, 3) circle (4pt);
+    \node[font=\small, right] at (8.3, 3) {极小值 ($3! = 6$ 个)};
+    \draw[thick, orange] (7.7, 2) -- (8.3, 2);
+    \node[font=\small, right] at (8.3, 2) {index-1 鞍点 ($9$ 个)};
+    
+\end{tikzpicture}
+\caption{$m=3$ 时的对称性结构：6 个等价极小值，9 个 index-1 鞍点连接它们。}
+\end{figure}
+
+\subsection{等价极小值之间必有鞍点：拓扑论证}
+
+\begin{blackboard}[拓扑论证：为什么必有鞍点]
+
+\textbf{设定}：设 $\theta_A$ 和 $\theta_B = P\theta_A$ 是两个等价的全局最小值（$P$ 是某个置换）。
+
+\textbf{问题}：$\theta_A$ 和 $\theta_B$ 之间的 loss landscape 是什么样的？
+
+\textbf{论证}：
+
+考虑连接 $\theta_A$ 和 $\theta_B$ 的\textbf{任意连续路径} $\gamma: [0,1] \to \mathbb{R}^d$，$\gamma(0) = \theta_A$，$\gamma(1) = \theta_B$。
+
+沿路径的 loss 值 $L(\gamma(t))$ 是一个连续函数，满足：
+\begin{itemize}
+    \item $L(\gamma(0)) = L(\gamma(1)) = L^*$（全局最小值）
+    \item 如果 $\theta_A \neq \theta_B$（它们在参数空间中是不同的点）
+\end{itemize}
+
+\textbf{两种情况}：
+
+\textbf{情况 1}：路径上 $L(\gamma(t)) = L^*$ 恒成立（整条路径都是全局最小值）
+
+$\Rightarrow$ 全局最小值形成\textbf{连通集}
+
+\textbf{情况 2}：路径上存在 $t^*$ 使得 $L(\gamma(t^*)) > L^*$
+
+$\Rightarrow$ 路径上必有一个\textbf{极大点}（局部极大或鞍点）
+
+由于深度网络通常不会有"全局最小值的连续流形"（除非特殊退化情况），情况 2 更常见。
+
+\textbf{结论}：等价极小值之间至少存在一个鞍点！
+
+\end{blackboard}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[scale=1.0]
+    % Loss landscape 示意图
+    \draw[thick, ->] (0, 0) -- (10, 0) node[right] {参数空间};
+    \draw[thick, ->] (0, 0) -- (0, 4) node[above] {Loss};
+    
+    % 两个等价极小值
+    \draw[thick, myblue] plot[smooth] coordinates {
+        (1, 0.5) (2, 2.5) (3, 1.5) (4, 2.8) (5, 0.5) (6, 2.8) (7, 1.5) (8, 2.5) (9, 0.5)
+    };
+    
+    % 极小值点
+    \fill[red] (1, 0.5) circle (3pt);
+    \fill[red] (5, 0.5) circle (3pt);
+    \fill[red] (9, 0.5) circle (3pt);
+    
+    % 鞍点
+    \fill[orange] (3, 1.5) circle (3pt);
+    \fill[orange] (7, 1.5) circle (3pt);
+    
+    % 标注
+    \node[red, font=\small] at (1, -0.3) {$\theta^*$};
+    \node[red, font=\small] at (5, -0.3) {$P_1\theta^*$};
+    \node[red, font=\small] at (9, -0.3) {$P_2\theta^*$};
+    \node[orange, font=\small] at (3, 1.9) {鞍点};
+    \node[orange, font=\small] at (7, 1.9) {鞍点};
+    
+    % 说明
+    \node[font=\small] at (5, 3.5) {等价极小值（置换对称）由鞍点连接};
+\end{tikzpicture}
+\caption{置换对称性产生等价极小值，它们之间由鞍点连接。}
+\end{figure}
+
+\subsection{定量分析：鞍点的 index}
+
+\begin{blackboard}[交换两个神经元的鞍点（Simsek et al. 2021）]
+
+考虑最简单的置换：交换神经元 $i$ 和 $j$。
+
+设 $\theta^* = (\ldots, w_i, v_i, \ldots, w_j, v_j, \ldots)$ 是极小值，$P_{ij}\theta^*$ 是交换后的等价极小值。
+
+\textbf{核心想法}：直接看两者的\textbf{中点}（merged 配置）：
+\[
+\theta^{\text{mid}}_{ij} := \tfrac{1}{2}\bigl(\theta^* + P_{ij}\theta^*\bigr)
+\]
+
+具体地，在中点处：
+\[
+w_i^{\text{mid}} = w_j^{\text{mid}} = \tfrac{1}{2}(w_i + w_j), \quad v_i^{\text{mid}} = v_j^{\text{mid}} = \tfrac{1}{2}(v_i + v_j)
+\]
+其他神经元保持不变。\textbf{两个神经元"合并"了。}
+
+\textbf{为什么中点是临界点？——对称性论证}
+
+定义 \textbf{merged 子空间}：
+\[
+M_{ij} = \{\theta : w_i = w_j,\ v_i = v_j\}
+\]
+
+在 $M_{ij}$ 上，loss 实际只看到 $m-1$ 个有效神经元——神经元 $i, j$ 合并为单个有效神经元，输出贡献为 $(v_i + v_j)\sigma(w_i^\top x)$。
+
+引入对称分解：把 $i, j$ 的参数写成
+\[
+w_i = \bar{w} + \delta_w,\ \ w_j = \bar{w} - \delta_w; \quad v_i = \bar{v} + \delta_v,\ \ v_j = \bar{v} - \delta_v
+\]
+其中 $\bar{w}, \bar{v}$ 是\textbf{对称分量}，$\delta_w, \delta_v$ 是\textbf{反对称分量}。中点对应 $\delta_w = \delta_v = 0$。
+
+\textbf{关键事实}：交换 $i \leftrightarrow j$ 等价于 $(\delta_w, \delta_v) \to (-\delta_w, -\delta_v)$。由 loss 的置换不变性：
+\[
+L(\bar{w}, \bar{v}, \delta_w, \delta_v) = L(\bar{w}, \bar{v}, -\delta_w, -\delta_v)
+\]
+所以 loss 关于 $(\delta_w, \delta_v)$ 是\textbf{偶函数}。
+
+\textbf{推论 1：临界条件}
+
+偶函数在 0 处的一阶导自动为零：
+\[
+\left.\frac{\partial L}{\partial \delta_w}\right|_{\delta=0} = 0, \quad \left.\frac{\partial L}{\partial \delta_v}\right|_{\delta=0} = 0
+\]
+加上对称方向（$\bar{w}, \bar{v}$）上由原优化条件继承的 $\partial L / \partial \bar{w} = 0$ 等，$\theta^{\text{mid}}_{ij}$ 是\textbf{临界点}。
+
+\textbf{推论 2：是鞍点而不是极小值}
+
+沿反对称方向二阶展开：
+\[
+L(\theta^{\text{mid}}_{ij} + \delta) = L(\theta^{\text{mid}}_{ij}) + \tfrac{1}{2}\delta^\top H_\perp \delta + O(\|\delta\|^4)
+\]
+（偶函数没有奇数阶项。）
+
+但注意：从 $\theta^{\text{mid}}_{ij}$ 出发，沿反对称方向走到 $(\delta_w, \delta_v) = \tfrac{1}{2}(w_i - w_j,\ v_i - v_j)$ 时\textbf{恰好回到 $\theta^*$}！
+
+由 $L(\theta^*) < L(\theta^{\text{mid}}_{ij})$（假设原极小值非平凡且合并损失了表达能力），存在反对称方向使得 loss 减小 → \textbf{$H_\perp$ 至少有一个负特征值}。
+
+所以 $\theta^{\text{mid}}_{ij}$ 是\textbf{至少 index-1 鞍点}。
+
+\end{blackboard}
+
+\begin{insight}[一行总结]
+两个神经元"合并"得到的配置 $\theta^{\text{mid}}_{ij}$ 是临界点（由 $i \leftrightarrow j$ 对称性下 loss 的偶性强制），且合并通常降低模型表达力 → loss 升高 → 沿"分开两神经元"方向有负曲率 → 鞍点。
+
+\textbf{完全代数/对称性的论证，不需要任何动力学或随机性。}
+\end{insight}
+
+\begin{insight}[对称性鞍点的特殊性]
+这些由对称性产生的鞍点是\textbf{"好"的鞍点}：
+\begin{enumerate}
+    \item 它们连接\textbf{等价}的全局最小值
+    \item 沿负曲率方向走，会到达另一个全局最小值
+    \item SGD 在这些鞍点附近不会"卡住"——随机扰动会推向某个极小值
+\end{enumerate}
+
+这些鞍点有\textbf{明确的几何意义}：它们是参数空间中"两个神经元被强制相同"的子空间上的临界点。这与"随机鞍点"完全不同——它们是网络对称性的结构产物。
+\end{insight}
+
+\subsection{符号对称性}
+
+除了置换对称，还有另一种重要对称性。
+
+\begin{blackboard}[ReLU 网络的符号对称性]
+
+如果同时翻转神经元 $j$ 的输入和输出权重符号：
+\[
+(w_j, v_j) \to (-w_j, -v_j)
+\]
+
+对于 $\text{ReLU}$，这\textbf{不会}保持输出不变（因为 $\text{ReLU}(-z) \neq -\text{ReLU}(z)$）。
+
+但对于\textbf{Leaky ReLU} 或其他奇对称激活函数：
+\[
+\sigma(-z) = -\sigma(z) \Rightarrow v_j \sigma(w_j^\top x) = (-v_j)\sigma((-w_j)^\top x)
+\]
+
+\textbf{推论}：每个神经元有 2 种等价配置，$m$ 个神经元共 $2^m$ 种。
+
+结合置换对称，总共有 $m! \times 2^m$ 个等价极小值！
+
+\end{blackboard}
+
+\subsection{过参数化下的全局极小值流形}
+
+当网络\textbf{过参数化}（参数量 $\gg$ 数据量）时，情况更加有趣。
+
+\begin{blackboard}[过参数化的几何（Cooper 2018, Freeman \& Bruna 2016）]
+
+\textbf{设定}：$n$ 个训练样本，网络参数 $d$ 维，$d \gg n$。
+
+\textbf{定理}（非正式）：对于足够宽的网络，使得训练 loss = 0 的参数集合是一个\textbf{连通的高维流形}。
+
+\textbf{直觉}：
+\begin{itemize}
+    \item 方程 $f(x_i; \theta) = y_i$（$i = 1, \ldots, n$）定义了 $n$ 个约束
+    \item 在 $d$ 维参数空间中，解集通常是 $d - n$ 维
+    \item 当 $d \gg n$ 时，这个流形是\textbf{高维且连通的}
+\end{itemize}
+
+\textbf{结合对称性}：
+\begin{itemize}
+    \item 所有 $m! \times 2^m$ 个对称副本都在这个流形上
+    \item 它们不再是孤立的点，而是流形上的不同区域
+    \item 鞍点成为流形的"颈部"（连接不同区域）
+\end{itemize}
+
+\end{blackboard}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[scale=0.9]
+    % 欠参数化
+    \begin{scope}[xshift=0cm]
+        \node[font=\small\bfseries] at (2.5, 3.5) {欠参数化 ($d < n$)};
+        
+        % 离散极小值点
+        \fill[red] (1, 1) circle (4pt);
+        \fill[red] (2.5, 1.5) circle (4pt);
+        \fill[red] (4, 1) circle (4pt);
+        
+        % 鞍点
+        \fill[orange] (1.75, 2) circle (3pt);
+        \fill[orange] (3.25, 2) circle (3pt);
+        
+        % 连接线（表示能量路径）
+        \draw[dashed, gray] (1, 1) -- (1.75, 2) -- (2.5, 1.5);
+        \draw[dashed, gray] (2.5, 1.5) -- (3.25, 2) -- (4, 1);
+        
+        \node[font=\small] at (2.5, 0.3) {离散的等价极小值};
+    \end{scope}
+    
+    % 过参数化
+    \begin{scope}[xshift=7cm]
+        \node[font=\small\bfseries] at (2.5, 3.5) {过参数化 ($d \gg n$)};
+        
+        % 连通流形
+        \draw[very thick, red!70!black, fill=red!10] 
+            plot[smooth cycle] coordinates {(0.5, 1) (1, 2.5) (2.5, 2.8) (4, 2.5) (4.5, 1) (3, 0.5) (1.5, 0.5)};
+        
+        % 标注区域
+        \node[font=\small] at (1.2, 1.5) {$\theta^*$};
+        \node[font=\small] at (3.3, 1.5) {$P\theta^*$};
+        
+        \node[font=\small] at (2.5, 0) {连通的极小值流形};
+    \end{scope}
+\end{tikzpicture}
+\caption{欠参数化 vs 过参数化：后者的全局最小值形成连通流形。}
+\end{figure}
+
+\subsection{Mode Connectivity：实验验证}
+
+\begin{blackboard}[Mode Connectivity 实验（Draxler et al. 2018, Garipov et al. 2018）]
+
+\textbf{实验设计}：
+\begin{enumerate}
+    \item 从不同随机初始化训练同一网络，得到两个解 $\theta_A$ 和 $\theta_B$
+    \item 寻找连接它们的\textbf{低 loss 路径}
+\end{enumerate}
+
+\textbf{发现}：
+\begin{itemize}
+    \item \textbf{直线路径} $\theta_A \to \theta_B$：通常有高 loss barrier
+    \item \textbf{曲线路径}（Bezier 曲线或折线）：可以找到几乎平坦的路径！
+\end{itemize}
+
+\textbf{解释}：
+\begin{itemize}
+    \item $\theta_A$ 和 $\theta_B$ 可能是某个 $\theta^*$ 的不同对称副本
+    \item 或者它们在同一个连通的极小值流形上
+    \item 直线路径"穿过"高 loss 区域，曲线路径"绕过"
+\end{itemize}
+
+\end{blackboard}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[scale=0.85]
+    % 参数空间俯视图
+    \draw[thick, ->] (0, 0) -- (8, 0) node[right] {$\theta_1$};
+    \draw[thick, ->] (0, 0) -- (0, 5) node[above] {$\theta_2$};
+    
+    % 低loss区域（流形）
+    \draw[very thick, green!50!black, fill=green!10] 
+        plot[smooth] coordinates {(1, 1) (2, 3) (4, 4) (6, 3.5) (7, 1.5) (6, 0.5) (3, 0.5) (1, 1)};
+    
+    % 两个解
+    \fill[red] (1.5, 1.5) circle (4pt) node[left, font=\small] {$\theta_A$};
+    \fill[red] (6.5, 2) circle (4pt) node[right, font=\small] {$\theta_B$};
+    
+    % 直线路径（穿过高loss）
+    \draw[thick, red, dashed] (1.5, 1.5) -- (6.5, 2);
+    \node[red, font=\small] at (4, 2.5) {直线：有 barrier};
+    
+    % 曲线路径（沿着流形）
+    \draw[thick, blue] plot[smooth] coordinates {(1.5, 1.5) (2, 2.8) (4, 3.8) (5.5, 3.2) (6.5, 2)};
+    \node[blue, font=\small] at (4, 4.5) {曲线：低 loss};
+    
+    % 高loss区域
+    \node[gray, font=\small] at (4, 1) {高 loss 区域};
+\end{tikzpicture}
+\caption{Mode Connectivity：直线路径穿过高 loss 区域，但存在沿着低 loss 流形的曲线路径。}
+\end{figure}
+
+\subsection{综合：对称性视角的优势}
+
+\begin{keypoint}[对称性视角的优势]
+
+这套对称性论证的几个关键特性：
+
+\begin{enumerate}
+    \item \textbf{不依赖数据分布}：对称性是网络结构的性质，与数据无关
+    \item \textbf{可精确计算}：$m!$ 个等价极小值是精确的，不是渐近近似
+    \item \textbf{几何直觉清晰}：鞍点连接等价极小值，每个鞍点都有明确意义
+    \item \textbf{可实验验证}：Mode Connectivity 直接检验了这个图景
+\end{enumerate}
+
+\textbf{回答原始问题}：
+
+\textit{Q: 为什么 SGD 不会卡在鞍点？}
+
+\textit{A: 因为大部分鞍点是连接等价极小值的"通道"。SGD 的噪声会推动参数沿负曲率方向走，最终到达某个极小值。过参数化时，这些极小值形成连通流形，SGD 本质上是在流形上漫步。}
+\end{keypoint}
+
+\subsection{关键计算：成为极小值的概率}
+
+\begin{blackboard}[板书推导：指数小的概率]
+
+\textbf{问题}：一个临界点是局部极小值的概率是多少？
+
+\textbf{条件}：所有 $d$ 个 Hessian 特征值都必须为正。
+
+\textbf{简化模型}：假设特征值的正负性独立（半圆律给出 $P(\lambda_i > 0) \approx 0.5$）。
+
+\[
+P(\text{Local Min}) = P(\lambda_1 > 0) \cdot P(\lambda_2 > 0) \cdots P(\lambda_d > 0) \approx 0.5^d = 2^{-d}
+\]
+
+\textbf{数值估计}：
+\begin{itemize}
+    \item $d = 100$: $P \approx 2^{-100} \approx 10^{-30}$
+    \item $d = 1000$: $P \approx 10^{-300}$
+    \item $d = 10^6$（典型神经网络）: $P \approx 10^{-300000}$ ！
+\end{itemize}
+
+\textbf{结论}：在高维空间中，\textbf{几乎所有临界点都是鞍点}！
+
+\end{blackboard}
+
+\begin{insight}[维数诅咒变成祝福：但只是故事的一半]
+在二维空间，如果所有方向都正曲率（前面堵住了），我们就卡住了。
+
+但在 $d = 10^6$ 维空间，只要有\textbf{一个}维度的曲率是负的，GD 就可以沿着这个方向"滑下去"。半圆律给出 $P(\text{所有 }d\text{ 方向同时正}) = 2^{-d}$，这是天文小概率。
+
+\textbf{但故事远不止于此}。"鞍点多"不直接等于"优化容易"——真正决定优化难度的是\textbf{鞍点的"质量"}和低 loss 解的几何结构。下面两小节展开这个更精细的图景。
+\end{insight}
+
+\subsection{关键区分：结构性鞍点 vs 病理性鞍点}
+
+到目前为止我们建立了"几乎所有临界点都是鞍点"的图景。但这个陈述\textbf{过于粗糙}——\textbf{鞍点之间也不一样}。
+
+\begin{keypoint}[鞍点的两种类型]
+
+\textbf{结构性鞍点}（"好鞍点"）：由网络对称性强制产生的鞍点：
+\begin{itemize}
+    \item 神经元合并配置（$w_i = w_j,\ v_i = v_j$）——上一节我们刚证明过的中点
+    \item Leaky ReLU 网络的符号翻转中点
+    \item 缩放对称性下的退化配置
+\end{itemize}
+特征：
+\begin{itemize}
+    \item 有\textbf{清晰的负曲率方向}（"分开两神经元"等具体几何方向）
+    \item 沿负曲率方向走可达\textbf{等价极小值}
+    \item SGD 噪声容易投影到逃离方向 → 不会卡住
+\end{itemize}
+
+\textbf{病理性鞍点}（"坏鞍点"）：高 loss、负曲率很弱、周围近似平坦的临界点：
+\begin{itemize}
+    \item 没有强逃离方向
+    \item loss 显著高于全局极小
+    \item 真正可能拖慢优化的就是这种
+\end{itemize}
+
+\textbf{核心区别}：
+\[
+\boxed{\text{鞍点多} \ \not\Longleftrightarrow\ \text{坏鞍点多}}
+\]
+高维 + 对称性带来的"鞍点多"主要是结构性鞍点——它们\textbf{不是}优化障碍，更像是低 loss 区域之间的"山口"或"通道"。
+\end{keypoint}
+
+\subsection{什么真正改善了优化？}
+
+把以上观察统合起来，我们可以\textbf{重新定位}过参数化对优化的真正贡献。
+
+一个常见的\textbf{错误叙事}是说："大网络更好训练，因为鞍点更少。"事实恰恰相反——过参数化\textbf{增加}了结构性鞍点（更多对称性 → 更多等价极小值 → 更多连接它们的鞍点）。
+
+正确的叙事是：
+
+\begin{keypoint}[大网络更好训练的真正原因]
+
+\begin{enumerate}
+    \item \textbf{鞍点数量更多，但它们也更易逃}：高 index 鞍点有许多负曲率方向，SGD 噪声容易投影到某个负方向上
+    \item \textbf{病理性极小值变得稀少}：训练约束 $f(x_i;\theta) = y_i$ 只有 $n$ 个，参数 $d \gg n$ 时，"无解"或"高 loss 解"的情况罕见
+    \item \textbf{低 loss 解从孤立点变为高维流形}：解集维数 $\geq d - n$（下一节用 Hessian 秩精确刻画）
+    \item \textbf{Mode connectivity}：低 loss 区域之间通常\textbf{连通}，优化器在等价区域间几乎自由穿梭
+\end{enumerate}
+
+\textbf{综合结论}：
+\[
+\boxed{\text{大网络不是因为 landscape 更简单，而是因为 landscape 更冗余。}}
+\]
+\end{keypoint}
+
+\begin{insight}["冗余"的具体含义]
+"冗余"在这里有几层精确含义：
+\begin{itemize}
+    \item \textbf{参数冗余}：同一个低 loss 状态对应 $\sim m! \cdot 2^m$ 个等价参数配置
+    \item \textbf{解集冗余}：满足训练约束的解集是 $(d-n)$ 维流形，不是孤立点
+    \item \textbf{路径冗余}：任意两个低 loss 解之间通常有低 loss 路径连通
+    \item \textbf{曲率冗余}：Hessian 在解流形上有 $\geq d-n$ 个零特征值——大量平坦方向
+\end{itemize}
+
+\textbf{核心直觉}：优化器"撞上"低 loss 区域的目标空间是巨大的——\textbf{不需要精确导航到一个孤立点}。这是大网络相对小网络真正的优化优势。
+\end{insight}
+
+
+%===========================================================
+\section{第四部分：逃离鞍点的理论}
+%===========================================================
+
+既然高 loss 区域几乎都是鞍点，我们需要回答：\textbf{如何有效逃离鞍点？}
+
+\subsection{Strict Saddle 的定义}
+
+\begin{definition}[Strict Saddle]
+一个临界点 $w^*$ 是 \textbf{strict saddle}，如果：
+\begin{enumerate}
+    \item $\nabla f(w^*) = 0$（是临界点）
+    \item $\lambda_{\min}(\nabla^2 f(w^*)) < 0$（Hessian 有负特征值）
+\end{enumerate}
+\end{definition}
+
+根据上一节的随机矩阵理论分析，\textbf{高维空间中的鞍点几乎都是 strict saddle}（概率趋近于 1）。
+
+\subsection{负曲率方向的逃逸}
+
+\begin{blackboard}[板书推导：沿负曲率方向的指数增长]
+
+设 $w^*$ 是一个 strict saddle，Hessian 最小特征值为 $\lambda_{\min} < 0$，对应特征向量为 $v$。
+
+考虑从 $w^* + \epsilon v$ 出发的 GD 轨迹（$\epsilon$ 很小）。
+
+\textbf{局部近似}：在 $w^*$ 附近，loss 可以二次近似为
+\[
+f(w) \approx f(w^*) + \frac{1}{2}(w - w^*)^\top H (w - w^*)
+\]
+
+沿 $v$ 方向的动力学：
+\[
+\frac{d}{dt}(w - w^*)^\top v = -\eta \lambda_{\min} (w - w^*)^\top v
+\]
+
+由于 $\lambda_{\min} < 0$，这是一个\textbf{指数增长}！
+
+设 $\delta_t = (w_t - w^*)^\top v$，则：
+\[
+\delta_t = \delta_0 \cdot (1 - \eta \lambda_{\min})^t = \delta_0 \cdot (1 + \eta |\lambda_{\min}|)^t
+\]
+
+\textbf{结论}：只要初始点在负曲率方向有微小分量，GD 会以指数速度逃离鞍点。
+
+\end{blackboard}
+
+\subsection{扰动梯度下降}
+
+\begin{algorithm}
+\caption{Perturbed Gradient Descent}
+\begin{algorithmic}[1]
+\STATE 初始化 $w_0$
+\FOR{$t = 0, 1, 2, \ldots$}
+    \IF{$\|\nabla f(w_t)\| < \epsilon$（接近临界点）}
+        \STATE $w_t \leftarrow w_t + \xi$，其中 $\xi \sim \text{Uniform}(B_r)$（在半径 $r$ 的球内均匀采样）
+    \ENDIF
+    \STATE $w_{t+1} = w_t - \eta \nabla f(w_t)$
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[Jin et al., 2017]
+对于满足 Lipschitz 条件的函数，Perturbed GD 在 $O(\text{poly}(d, 1/\epsilon))$ 时间内收敛到\textbf{二阶驻点}（满足 $\nabla f = 0$ 且 $\nabla^2 f \succeq -\epsilon I$）。
+\end{theorem}
+
+\begin{insight}[SGD 的内置扰动]
+在实践中，我们很少需要显式添加扰动，因为 \textbf{SGD 的梯度噪声}已经自带扰动！
+
+Mini-batch 梯度的方差会在鞍点附近提供"随机推力"，帮助逃离。
+
+这解释了为什么 SGD 在深度学习中比确定性 GD 更受欢迎——噪声不是 bug，是 feature！
+\end{insight}
+
+
+%===========================================================
+\section{第五部分：Hessian 谱的经验分析}
+%===========================================================
+
+从理论到实验：真实神经网络的 Hessian 谱长什么样？
+
+\subsection{计算挑战}
+
+\begin{mathbox}[Hessian 的规模问题]
+对于参数量为 $d$ 的神经网络：
+\begin{itemize}
+    \item Hessian 矩阵 $H \in \mathbb{R}^{d \times d}$
+    \item 现代网络 $d \sim 10^6 - 10^9$
+    \item 存储 $H$ 需要 $d^2$ 个数，即 $10^{12} - 10^{18}$ 个浮点数
+    \item \textbf{完全不可行！}
+\end{itemize}
+\end{mathbox}
+
+\textbf{解决方案}：随机 Lanczos 方法——只计算 Hessian-向量积，不存储完整 Hessian。
+
+\begin{blackboard}[随机 Lanczos 算法简介]
+
+\textbf{核心思想}：我们只需要 Hessian 的特征值分布，不需要所有特征向量。
+
+\textbf{Hessian-向量积}：对于损失函数 $L(\theta)$，可以通过两次反向传播计算 $Hv$：
+\[
+Hv = \nabla_\theta (\nabla_\theta L \cdot v)
+\]
+
+\textbf{Lanczos 迭代}：通过 $k$ 次 Hessian-向量积，构建 $k$ 维 Krylov 子空间，在其中近似特征值分布。
+
+\textbf{复杂度}：$O(kd)$ 而非 $O(d^2)$！
+
+\end{blackboard}
+
+\subsection{为什么是 Bulk + Outliers？——Gauss-Newton 视角}
+
+实验观察到 Hessian 谱有 bulk + outliers 结构。我们可以从一个干净的代数事实理解这个结构的起源：在插值解附近，Hessian 的秩被\textbf{训练样本数} $n$ 严格限制。
+
+\begin{blackboard}[板书推导：插值解附近的 Hessian 秩]
+
+\textbf{设定}：考虑 MSE 损失
+\[
+L(\theta) = \frac{1}{2}\sum_{i=1}^{n} r_i(\theta)^2, \quad r_i(\theta) := f(x_i; \theta) - y_i
+\]
+设 Jacobian $J(\theta) \in \mathbb{R}^{n \times d}$，其第 $i$ 行是 $\nabla_\theta r_i^\top$。
+
+\textbf{Step 1：Hessian 的 Gauss-Newton 分解}
+
+链式法则计算：
+\[
+\nabla L = \sum_i r_i \nabla r_i = J^\top r
+\]
+\[
+\nabla^2 L = \underbrace{J^\top J}_{\text{Gauss-Newton 项}} + \underbrace{\sum_i r_i \nabla^2 r_i}_{\text{残差项}}
+\]
+
+\textbf{Step 2：插值解附近的简化}
+
+在过参数化设定下，训练 loss 接近 0 意味着 $r_i(\theta) \approx 0$ 对所有 $i$。残差项消失：
+\[
+\boxed{\nabla^2 L(\theta) \approx J(\theta)^\top J(\theta)}
+\]
+
+\textbf{Step 3：秩的硬约束}
+
+由于 $J \in \mathbb{R}^{n \times d}$ 且 $d \gg n$：
+\[
+\text{rank}(J^\top J) = \text{rank}(J) \leq \min(n, d) = n
+\]
+
+所以 $\nabla^2 L$ 在插值解附近：
+\begin{itemize}
+    \item 至多 $n$ 个\textbf{非零正特征值}（来自 $J^\top J$ 的谱）
+    \item 至少 $d - n$ 个\textbf{零特征值}
+\end{itemize}
+
+\textbf{Step 4：零特征值的几何含义}
+
+设 $v \in \ker(J^\top J)$，等价于 $Jv = 0$。这意味着：
+\[
+J(\theta) v = \begin{pmatrix} \nabla r_1^\top v \\ \vdots \\ \nabla r_n^\top v \end{pmatrix} = 0
+\]
+即沿 $v$ 方向走，所有残差 $r_i$ 都\textbf{不变}（一阶近似下）——这正是\textbf{解流形} $M = \{\theta : f(x_i; \theta) = y_i, \forall i\}$ 在该点的\textbf{切空间}。
+
+切空间维数 $\geq d - n$，与"约束 $n$ 维 + 参数 $d$ 维 $\Rightarrow$ 解集 $(d-n)$ 维"完全一致。
+
+\end{blackboard}
+
+\begin{keypoint}[Bulk + Outliers 的理论起源]
+Gauss-Newton 分解直接给出 Hessian 的两部分结构：
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lll}
+\toprule
+\textbf{部分} & \textbf{特征值数量} & \textbf{含义} \\ \midrule
+Bulk（$\lambda \approx 0$）& $\geq d - n$ & 解流形切空间——loss 平坦方向 \\
+Outliers（$\lambda > 0$）& $\leq n$ & $J^\top J$ 谱——数据拟合曲率 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{关键预测}：outlier 数量上界恰好是\textbf{训练样本数 $n$}。这个理论预测与 Sagun, Papyan 等人的实验观察\textbf{定量吻合}。
+\end{keypoint}
+
+\begin{insight}[与第三部分的呼应]
+我们在第三部分用对称性 + 流形论证说"低 loss 解集是 $(d-n)$ 维流形"。Gauss-Newton 给出同一结论的\textbf{微分几何刻画}：
+
+\textbf{$d - n$ 维平坦方向} = 解流形的切空间 = Hessian 的零空间。
+
+这就是"过参数化让 landscape 更冗余"的精确数学陈述：冗余的"维度数量"等于 $d - n$，恰好是 Hessian 零特征值的下界。
+\end{insight}
+
+\subsection{实验观察：Bulk + Outliers 结构}
+
+Sagun, Papyan 等人的实验揭示了神经网络 Hessian 的普遍结构：
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=12cm, height=6cm,
+        xlabel={特征值 $\lambda$},
+        ylabel={密度（对数尺度）},
+        title={神经网络 Hessian 特征值分布示意图},
+        xmin=-1, xmax=8,
+        ymin=0, ymax=2,
+        axis lines=left,
+        ytick=\empty
+    ]
+        % Bulk：接近0的大量特征值
+        \addplot[thick, myblue, fill=myblue!30] expression[domain=-0.5:1.5] {1.5*exp(-2*(x-0.5)^2)};
+        
+        % Outliers：少数大特征值
+        \addplot[only marks, mark=*, mark size=4pt, red] coordinates {
+            (3, 0.3) (4.5, 0.2) (6, 0.15) (7, 0.1)
+        };
+        
+        % 标注
+        \node[font=\small, myblue] at (axis cs: 0.5, 1.7) {\textbf{Bulk}};
+        \node[font=\small, myblue] at (axis cs: 0.5, 1.3) {大量特征值};
+        \node[font=\small, myblue] at (axis cs: 0.5, 1.0) {$\approx 0$};
+        
+        \node[font=\small, red] at (axis cs: 5, 0.5) {\textbf{Outliers}};
+        \node[font=\small, red] at (axis cs: 5, 0.35) {少数大特征值};
+        
+        % 分隔线
+        \draw[dashed, gray] (axis cs: 2, 0) -- (axis cs: 2, 1.8);
+    \end{axis}
+\end{tikzpicture}
+\caption{Hessian 谱的典型结构：大量特征值集中在 0 附近（Bulk），少数特征值很大（Outliers）。}
+\end{figure}
+
+\begin{keypoint}[Hessian 谱的两部分]
+\begin{enumerate}
+    \item \textbf{Bulk}（主体）：
+    \begin{itemize}
+        \item 绝大多数特征值接近 0
+        \item 对应 loss landscape 的"平坦方向"
+        \item 这些方向上参数变化对 loss 影响很小
+    \end{itemize}
+    
+    \item \textbf{Outliers}（离群值）：
+    \begin{itemize}
+        \item 少数（通常 $O(n)$ 个，$n$ 是数据量）大特征值
+        \item 对应"学到的主要特征"的方向
+        \item 沿这些方向移动会显著改变网络输出
+    \end{itemize}
+\end{enumerate}
+\end{keypoint}
+
+\subsection{与随机矩阵理论的联系}
+
+\begin{mathbox}[Bulk 与 Marchenko-Pastur 分布]
+当网络未充分训练时，Hessian 的 bulk 部分类似于 \textbf{Marchenko-Pastur 分布}——这是随机矩阵 $\frac{1}{n}X^\top X$ 特征值的渐近分布。
+
+随着训练进行，outliers 从 bulk 中"跳出"，这对应于\textbf{信号从噪声中分离}。
+
+\[
+\text{Outliers} \leftrightarrow \text{学到的特征}
+\]
+\end{mathbox}
+
+
+%===========================================================
+\section{第六部分：Edge of Stability——超越经典稳定性}
+%===========================================================
+
+第五部分我们看到 Hessian 谱有 bulk + outliers 结构。一个自然的问题是：在训练过程中，\textbf{最大特征值} $\lambda_{\max}(H_t)$ 怎么演化？经典优化理论会给一个明确预测——但实验告诉我们的，是另一个故事。
+
+\subsection{经典稳定性条件回顾}
+
+\begin{blackboard}[GD 在二次目标上的稳定性]
+
+考虑 $f(x) = \frac{1}{2}x^\top H x$，$H \succ 0$ 对称正定。
+
+GD 更新：$x_{t+1} = (I - \eta H) x_t$。
+
+在 $H$ 的特征基下：每个分量独立演化，$x_t^{(k)} = (1 - \eta \lambda_k)^t\, x_0^{(k)}$。
+
+\textbf{收敛条件}：$|1 - \eta \lambda_k| < 1$ 对所有 $k$ 成立，即
+\[
+\boxed{\eta < \frac{2}{\lambda_{\max}(H)}}
+\]
+
+如果 $\eta > 2/\lambda_{\max}$：最大特征值方向上 $|1 - \eta \lambda_{\max}| > 1$，分量\textbf{指数发散}。
+
+\textbf{这是凸优化教科书的标准结果。}对一般强凸光滑函数，类似结论成立（用 $L$-smoothness 替代 $\lambda_{\max}$）。
+\end{blackboard}
+
+\subsection{反直觉观察：Cohen et al.\ (2021)}
+
+Cohen 等人在真实神经网络训练中测量 sharpness $S_t = \lambda_{\max}(\nabla^2 L(\theta_t))$，发现一个普遍现象：
+
+\begin{keypoint}[Edge of Stability 现象]
+对几乎所有 $\eta$ 选择和模型架构（ResNet/Transformer/MLP）：
+
+\begin{enumerate}
+\item \textbf{Progressive Sharpening}（早期）：$S_t$ \textbf{单调上升}，可能跨越 $2/\eta$
+\item \textbf{Edge of Stability}（中后期）：$S_t \approx 2/\eta$，\textbf{自动稳定在边界}
+\item 进入 EoS 后，loss 不再单调下降——会\textbf{振荡}，但平均仍下降
+\end{enumerate}
+
+\textbf{这违反了所有经典理论的预测：}
+\begin{itemize}
+\item 经典 GD 理论：$\eta > 2/\lambda_{\max}$ 必然发散
+\item 实际神经网络：$\eta \cdot \lambda_{\max} \approx 2$ \textbf{长期稳定}，loss 仍下降
+\end{itemize}
+\end{keypoint}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=12cm, height=6cm,
+        xlabel={训练步数 $t$（log scale 示意）},
+        ylabel={Sharpness $\lambda_{\max}(H_t)$},
+        title={典型的 Edge of Stability 演化},
+        legend pos=south east,
+        ymin=0, ymax=120,
+        xmin=0, xmax=10,
+        grid=major
+    ]
+        % Progressive sharpening
+        \addplot[thick, blue] coordinates {(0,30) (0.5,40) (1,52) (1.5,65) (2,78) (2.5,86) (3,90)};
+        \addlegendentry{Progressive Sharpening}
+        % EoS oscillation
+        \addplot[thick, blue, dashed] expression[domain=3:10, samples=200] {90 + 8*sin(deg(15*x))*exp(-0.05*(x-3))};
+        \addlegendentry{Edge of Stability}
+        % 2/eta line
+        \draw[thick, red, dashed] (axis cs: 0, 90) -- (axis cs: 10, 90);
+        \node[red, font=\small] at (axis cs: 8, 95) {$2/\eta$（经典稳定边界）};
+        
+        \node[font=\small, blue] at (axis cs: 1.5, 60) [rotate=55] {单调上升};
+    \end{axis}
+\end{tikzpicture}
+\caption{神经网络训练中 sharpness 的典型演化：早期单调上升（Progressive Sharpening），跨过 $2/\eta$ 后维持在边界振荡（EoS）。}
+\end{figure}
+
+\subsection{进入 EoS 后训练在做什么？}
+
+当 $\eta \lambda_{\max} > 2$，主特征值方向理应发散——为什么 loss 还在降？
+
+\begin{insight}[两个时间尺度]
+EoS 状态下，参数动力学有\textbf{两个时间尺度}：
+
+\begin{itemize}
+\item \textbf{快尺度}（每步）：在 sharp 方向上振荡，幅度由不稳定性维持
+\item \textbf{慢尺度}（many steps）：在"平坦方向"上漂移，loss 真正下降
+\end{itemize}
+
+这有点像随机过程中的\textbf{平均化原理}（averaging）：快变量的振荡平均后，对慢变量产生一个\textbf{有效漂移}。这个漂移的方向恰好让系统稳定。
+\end{insight}
+
+\subsection{自稳定机制：板书推导}
+
+Damian-Nichani-Lee (2023) 给出了一个干净的简化模型，让自稳定机制变得透明。我们这里给出一个最小版本。
+
+\begin{blackboard}[简化模型：sharpness 依赖于"慢"参数]
+
+考虑两个参数 $(s, x)$，loss 为：
+\[
+L(s, x) = \frac{1}{2}\lambda(s) \cdot x^2 + V(s)
+\]
+
+其中：
+\begin{itemize}
+\item $x$ 是"sharp 方向"，$x$ 方向 sharpness 是 $\lambda(s)$
+\item $s$ 是"慢方向"（在最小处 $x \approx 0$ 附近的参数化）
+\item 假设 $\lambda'(s) > 0$：增加 $s$ 增加 sharpness（"progressive sharpening" 的来源）
+\end{itemize}
+
+\textbf{GD 更新}：
+\begin{align}
+x_{t+1} &= x_t - \eta \cdot \lambda(s_t) x_t = (1 - \eta\lambda(s_t))\, x_t \label{eq:eos-x}\\
+s_{t+1} &= s_t - \eta \left[\tfrac{1}{2}\lambda'(s_t)\, x_t^2 + V'(s_t)\right] \label{eq:eos-s}
+\end{align}
+
+\textbf{关键观察}：$x$ 的扩张因子 $|1 - \eta\lambda(s_t)|$ 依赖于慢变量 $s_t$。
+
+\textbf{Step 1：稳定阶段（$\eta\lambda(s) < 2$）}
+
+$x$ 收缩到 0（指数衰减）。$s$ 演化由 $-\eta V'(s)$ 主导，与 $x^2$ 无关（因为 $x \to 0$）。
+
+如果 $V'(s) < 0$：$s$ 增加，$\lambda(s)$ 增加 → \textbf{progressive sharpening}。
+
+\textbf{Step 2：跨过边界（$\eta\lambda(s) = 2 + \delta$，$\delta > 0$ 小）}
+
+$x_{t+1} = -(1+\delta) x_t$——近似翻转 + 小幅增长。$x$ 振荡，幅度按 $(1+\delta)^t$ 增长。
+
+\textbf{Step 3：振荡反作用于慢变量}
+
+$x$ 振荡时，$x^2$ 不再为零。考虑两步平均（注意振荡周期 $\approx 2$）：
+\[
+\bar{s}_{t+2} - \bar{s}_t \approx -2\eta \cdot \tfrac{1}{2}\lambda'(s)\, \overline{x^2} - 2\eta V'(s)
+\]
+其中 $\overline{x^2}$ 是振荡幅度的均方。
+
+\textbf{关键}：$\lambda'(s) > 0$ \textbf{且} $\overline{x^2} > 0$，所以振荡贡献了一个\textbf{额外漂移} $-\eta\lambda'(s)\overline{x^2}$ 让 $s$ \textbf{减小}。
+
+\textbf{Step 4：自洽稳态}
+
+稳态条件：振荡贡献的漂移 + $V'$ 的漂移恰好平衡，且 $x$ 的振荡幅度稳定。
+
+经过仔细计算（Damian-Nichani-Lee, Lemma 3.1）：稳态在 $\lambda(s^*) = 2/\eta$ 处达到。
+
+\textbf{物理图像}：振荡幅度 $\overline{x^2}$ 充当了一个\textbf{反馈量}——一旦 sharpness 超过 $2/\eta$，振荡会增长，进而通过 $\lambda'(s)$ 项把 $s$ 推向 sharpness 更小的方向，直到 sharpness 回到 $2/\eta$。
+
+\end{blackboard}
+
+\begin{keypoint}[Edge of Stability 的物理直觉]
+
+EoS 是一个\textbf{自动反馈控制系统}：
+
+\begin{itemize}
+\item \textbf{被控量}：sharpness $\lambda_{\max}$
+\item \textbf{执行器}：sharp 方向的振荡幅度 $\overline{x^2}$
+\item \textbf{控制律}：振荡幅度自动正比于 $\max(0, \eta\lambda - 2)$
+\item \textbf{设定点}：$\eta\lambda = 2$
+\end{itemize}
+
+GD 不"知道"自己在做反馈控制，但其动力学\textbf{自动}实现了这个反馈。这是高维非线性系统中 implicit dynamics 的一个绝佳例子。
+\end{keypoint}
+
+\subsection{为什么会 Progressive Sharpening？}
+
+EoS 假设 $\lambda(s)$ 在某些方向上递增。这是经验事实——\textbf{为什么神经网络的 sharpness 会自然增长？}
+
+目前没有完全的理论解释，但有几条线索：
+
+\begin{itemize}
+\item \textbf{Loss-curvature relation}（Cohen et al.）：在 NN 中，loss 减小本身倾向于 sharpening，特别是在 cross-entropy + softmax 设置下
+\item \textbf{Catapult mechanism}（Lewkowycz et al.\ 2020）：大 LR 训练初期会"反弹"到更高 sharpness 区域
+\item \textbf{对 lazy training 的反驳}：一些理论框架（如 NTK）假设网络宽到一定程度后参数和 Hessian 谱近似不变；EoS 直接证伪了这一点——sharpness 在训练中显著演化，特征学习是真实发生的
+\end{itemize}
+
+\subsection{实践含义}
+
+\subsubsection{大学习率为什么有效}
+
+\begin{insight}[大 LR 的 implicit bias 视角]
+经典理论说 $\eta < 2/\lambda_{\max}$，但 $\lambda_{\max}$ 在训练中变化。如果 $\eta$ 大：
+\begin{itemize}
+\item 训练自动\textbf{选择}让 $\lambda_{\max} = 2/\eta$ 的轨迹
+\item 这倾向于\textbf{平坦区域}（小 sharpness 兼容大 $\eta$）
+\item 平坦极小值通常\textbf{泛化更好}（Hochreiter-Schmidhuber 1997, Keskar et al.\ 2017）
+\end{itemize}
+
+\textbf{结论}：大 LR 不只是"快慢"的问题，而是 implicit bias 的问题——它选择更平坦的解。
+\end{insight}
+
+\subsubsection{Warmup 的解释}
+
+经典 LR warmup（线性增加 LR）的效果在 EoS 框架下变得清晰：
+\begin{itemize}
+\item 初期小 LR：让 sharpness 缓慢增长（progressive sharpening 完整发生）
+\item 后期大 LR：在已增长的 sharpness 上工作，选择平坦轨迹
+\end{itemize}
+
+如果直接用大 LR 而无 warmup：初期 $\lambda_{\max}$ 还很小，大 LR 不会触发 EoS——但可能因 stochastic gradient noise 直接跑出训练区域（NaN）。
+
+\subsubsection{Sharpness-Aware Minimization (SAM)}
+
+SAM (Foret et al.\ 2021) 显式优化
+\[
+\min_\theta \max_{\|\delta\| \leq \rho} L(\theta + \delta)
+\]
+鼓励小 sharpness。从 EoS 视角看：
+\begin{itemize}
+\item EoS：\textbf{隐式地}让 GD 访问低 sharpness 区域
+\item SAM：\textbf{显式地}强制低 sharpness
+\end{itemize}
+两者方向一致，SAM 可以视为对 implicit bias 的强化。
+
+
+%===========================================================
+\section{第七部分：权重矩阵的谱}
+%===========================================================
+
+最后，我们从另一个角度观察训练：\textbf{权重矩阵的奇异值如何变化？}
+
+\subsection{初始化时的谱}
+
+\begin{mathbox}[随机初始化的权重谱]
+对于随机初始化的权重矩阵 $W \in \mathbb{R}^{m \times n}$（元素 i.i.d. 高斯），其奇异值的平方（即 $W^\top W$ 的特征值）服从 \textbf{Marchenko-Pastur 分布}：
+\[
+\rho(\lambda) = \frac{\sqrt{(\lambda_+ - \lambda)(\lambda - \lambda_-)}}{2\pi \lambda \gamma \sigma^2}, \quad \lambda \in [\lambda_-, \lambda_+]
+\]
+其中 $\gamma = n/m$，$\lambda_\pm = \sigma^2(1 \pm \sqrt{\gamma})^2$。
+\end{mathbox}
+
+\subsection{训练后的变化}
+
+\begin{keypoint}[权重谱的演化规律]
+经验观察（Martin \& Mahoney, 2019 等）：
+\begin{enumerate}
+    \item \textbf{初始化}：奇异值服从 MP 分布，有明确的上界
+    \item \textbf{训练后}：分布出现 \textbf{heavy tail}（重尾），最大奇异值远超 MP 边界
+    \item \textbf{偏离程度与泛化相关}：偏离 MP 分布越多，通常学得越好
+\end{enumerate}
+\end{keypoint}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}
+    \begin{axis}[
+        width=12cm, height=5cm,
+        xlabel={奇异值 $\sigma$},
+        ylabel={密度（对数）},
+        title={权重矩阵奇异值分布的演化},
+        xmin=0, xmax=6,
+        ymin=0.01, ymax=2,
+        ymode=log,
+        legend pos=north east
+    ]
+        % 初始化：MP分布
+        \addplot[thick, blue, fill=blue!10] expression[domain=0.2:1.8] {exp(-((x-1)^2)/0.2)};
+        \addlegendentry{初始化（MP 分布）}
+        
+        % 训练后：heavy tail
+        \addplot[thick, red] expression[domain=0.2:5.5] {0.8*exp(-((x-1)^2)/0.3) + 0.15*exp(-(x-3)^2/0.5) + 0.05*exp(-(x-5)^2/0.3)};
+        \addlegendentry{训练后（Heavy Tail）}
+        
+        % MP边界
+        \draw[dashed, gray, thick] (axis cs: 1.8, 0.01) -- (axis cs: 1.8, 2);
+        \node[font=\small, gray] at (axis cs: 2.2, 0.5) {MP 边界};
+    \end{axis}
+\end{tikzpicture}
+\caption{训练使权重矩阵的奇异值分布产生重尾，超出 MP 分布预测的边界。}
+\end{figure}
+
+\subsection{直觉解释}
+
+\begin{insight}[奇异值与特征学习]
+权重矩阵的大奇异值对应于网络学到的"主要特征方向"：
+
+\begin{itemize}
+    \item 随机初始化时，没有特殊方向，所有奇异值相近
+    \item 训练放大了数据中重要的方向，产生少数大奇异值
+    \item 这些大奇异值编码了\textbf{学到的知识}
+\end{itemize}
+
+\textbf{练习思考}：如果你只能保留 top-$k$ 个奇异值压缩一个训练好的层，性能下降会随 $k$ 怎么变化？这就是低秩压缩（LoRA、SVD-based pruning）的理论基础。
+\end{insight}
+
+
+%===========================================================
+\section{总结}
+%===========================================================
+
+\begin{table}[h]
+\centering
+\caption{本周核心内容总结}
+\begin{tabular}{@{}p{2.8cm}p{3.3cm}p{4cm}p{4cm}@{}}
+\toprule
+\textbf{现象} & \textbf{数学工具} & \textbf{核心直觉} & \textbf{关键结论} \\ \midrule
+线性隐式正则化 & 线性代数（正交分解） & GD 沿最短路径走 & 偏好最小 $\ell_2$ 范数解 \\
+深度低秩偏好 & 平衡初始化 + SVD 动力学 & 大奇异值增长更快 & 深度放大隐式正则化 \\
+AdaBoost 偏好 & 函数空间坐标下降 & 凸 surrogate + 线性化 oracle & 最大 $\ell_1$-margin \\
+鞍点统计 & 随机矩阵 + 对称群 & 高维全正概率极小 & 几乎所有临界点是鞍点 \\
+好/坏鞍点二分 & 对称性 + Hessian 几何 & 结构性鞍点 vs 病理性鞍点 & 鞍点多 $\not=$ 坏鞍点多 \\
+逃离鞍点 & 动力学分析 & 负曲率方向指数增长 & SGD 噪声自带扰动 \\
+Hessian rank 约束 & Gauss-Newton 分解 & $\nabla^2 L \approx J^\top J$ at interp. & rank $\leq n$，flat dim $\geq d-n$ \\
+Edge of Stability & 二尺度自稳定 & 振荡幅度做反馈 & sharpness 自动卡在 $2/\eta$ \\
+权重谱 & MP 分布 & 训练产生 heavy tail & 偏离 MP = 特征学习 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keypoint}[本周的核心信息]
+\textbf{深度学习的成功是高维几何与优化动力学的必然结果：}
+\begin{enumerate}
+    \item \textbf{隐式偏好}（三种）让过参数化不等于过拟合：$\ell_2$、低秩、$\ell_1$-margin
+    \item 高维 + 对称性让鞍点无处不在但\textbf{大多是结构性的"好鞍点"}
+    \item \textbf{大网络的优势不是 landscape 简单，而是 landscape 冗余}：低 loss 解从孤立点变为 $(d-n)$ 维流形
+    \item \textbf{Edge of Stability} 让大学习率训练自动收敛到平坦区域
+    \item Hessian/权重谱的 heavy-tail 演化是\textbf{真实特征学习}的指纹
+\end{enumerate}
+\end{keypoint}
+
+
+%===========================================================
+\section{下周预告}
+%===========================================================
+
+本周我们看到，深度学习的"魔法"——过参数化下的良好泛化、SGD 在非凸地形上的稳健性——都可以被分解为干净的几何与代数事实。但我们一直在问"\textbf{优化算法找到了什么样的解}"，而尚未跳出"参数空间"看更大的图景。
+
+\textbf{下周：变分法与最优控制}
+
+我们将进入泛函优化的世界：
+\begin{itemize}
+    \item Euler-Lagrange 方程与变分原理
+    \item 最大熵原理与变分推断
+    \item 最优控制与 HJB 方程
+    \item Neural ODE：连续深度网络
+    \item Adjoint 方法：$O(1)$ 显存反向传播
+\end{itemize}
+
+这将连接优化理论与强化学习，为后续 RL 部分奠定基础。
+
+
+%===========================================================
+\section{参考文献}
+%===========================================================
+
+\begin{enumerate}
+    \item Arora, S., Cohen, N., Golowich, N., \& Hu, W. (2019). A convergence analysis of gradient descent for deep linear neural networks. \textit{ICLR}.
+    
+    \item Arora, S., Cohen, N., Hu, W., \& Luo, Y. (2019). Implicit regularization in deep matrix factorization. \textit{NeurIPS}.
+
+    \item Vapnik, V. N., \& Chervonenkis, A. Y. (1971). On the uniform convergence of relative frequencies of events to their probabilities. \textit{Theory of Probability \& Its Applications}.
+
+    \item Vapnik, V. N. (1998). \textit{Statistical Learning Theory}. Wiley.
+
+    \item Zhang, C., Bengio, S., Hardt, M., Recht, B., \& Vinyals, O. (2017). Understanding deep learning requires rethinking generalization. \textit{ICLR}.
+    
+    \item Simsek, B., Ged, F., Jacot, A., Spadaro, F., Hongler, C., Gerstner, W., \& Brea, J. (2021). Geometry of the loss landscape in overparameterized neural networks: Symmetries and invariances. \textit{ICML}.
+    
+    \item Draxler, F., Veschgini, K., Salmhofer, M., \& Hamprecht, F. A. (2018). Essentially no barriers in neural network energy landscape. \textit{ICML}.
+    
+    \item Jin, C., Ge, R., Netrapalli, P., Kakade, S. M., \& Jordan, M. I. (2017). How to escape saddle points efficiently. \textit{ICML}.
+    
+    \item Sagun, L., Bottou, L., \& LeCun, Y. (2017). Eigenvalues of the Hessian in deep learning: Singularity and beyond. \textit{arXiv:1611.07476}.
+    
+    \item Martin, C. H., \& Mahoney, M. W. (2019). Traditional and heavy-tailed self-regularization in neural network models. \textit{ICML}.
+    
+    \item Bray, A. J., \& Dean, D. S. (2007). Statistics of critical points of Gaussian fields on large-dimensional spaces. \textit{Physical Review Letters}.
+
+    \item Freund, Y., \& Schapire, R. E. (1997). A decision-theoretic generalization of on-line learning and an application to boosting. \textit{Journal of Computer and System Sciences}.
+
+    \item Mason, L., Baxter, J., Bartlett, P., \& Frean, M. (1999). Boosting algorithms as gradient descent. \textit{NeurIPS}.
+
+    \item Friedman, J. H. (2001). Greedy function approximation: A gradient boosting machine. \textit{Annals of Statistics}.
+
+    \item Schapire, R. E., Freund, Y., Bartlett, P., \& Lee, W. S. (1998). Boosting the margin: A new explanation for the effectiveness of voting methods. \textit{Annals of Statistics}.
+
+    \item Telgarsky, M. (2013). Margins, shrinkage, and boosting. \textit{ICML}.
+
+    \item Chen, T., \& Guestrin, C. (2016). XGBoost: A scalable tree boosting system. \textit{KDD}.
+
+    \item Soudry, D., Hoffer, E., Nacson, M. S., Gunasekar, S., \& Srebro, N. (2018). The implicit bias of gradient descent on separable data. \textit{JMLR}.
+
+    \item Cohen, J. M., Kaur, S., Li, Y., Kolter, J. Z., \& Talwalkar, A. (2021). Gradient descent on neural networks typically occurs at the edge of stability. \textit{ICLR}.
+
+    \item Damian, A., Nichani, E., \& Lee, J. D. (2023). Self-stabilization: The implicit bias of gradient descent at the edge of stability. \textit{ICLR}.
+
+    \item Lewkowycz, A., Bahri, Y., Dyer, E., Sohl-Dickstein, J., \& Gur-Ari, G. (2020). The large learning rate phase of deep learning: The catapult mechanism. \textit{arXiv:2003.02218}.
+
+    \item Foret, P., Kleiner, A., Mobahi, H., \& Neyshabur, B. (2021). Sharpness-Aware Minimization for efficiently improving generalization. \textit{ICLR}.
+\end{enumerate}
+
+\end{document}

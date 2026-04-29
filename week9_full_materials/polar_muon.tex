@@ -1,0 +1,807 @@
+\documentclass[11pt]{article}
+\usepackage[UTF8]{ctex}
+\usepackage[a4paper, margin=2.3cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{fillbetween}     % ← 加这一行
+\usetikzlibrary{arrows.meta, positioning, decorations.pathreplacing, calc}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, citecolor=blue!60!black}
+
+
+\definecolor{nsblue}{RGB}{31,119,180}
+\definecolor{peorange}{RGB}{255,127,14}
+\definecolor{jordanred}{RGB}{214,39,40}
+\definecolor{nsgreen}{RGB}{44,160,44}
+\definecolor{shadeblue}{RGB}{173,216,230}
+\definecolor{shadeorange}{RGB}{255,200,150}
+
+% ============================================================
+% 关键技巧：用 pgfmath 定义递归复合，避免一长串嵌套写错
+% NS3 多项式：p(x) = 1.5 x - 0.5 x^3
+% NS5 多项式：p(x) = 1.875 x - 1.25 x^3 + 0.375 x^5
+% ============================================================
+\pgfmathdeclarefunction{ns3}{1}{%
+  \pgfmathparse{1.5*#1 - 0.5*(#1)^3}%
+}
+\pgfmathdeclarefunction{ns5}{1}{%
+  \pgfmathparse{1.875*#1 - 1.25*(#1)^3 + 0.375*(#1)^5}%
+}
+
+\title{从 Newton-Schulz 到 Polar Express \\ \large 一步步看懂 Muon 里的多项式迭代}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\bigskip
+
+
+\section{Modded NanoGPT：Muon 是怎么火起来的}
+
+讲完算法，回到背景。Muon 这套东西能进入大家视野，很大程度是因为一个叫做 \textbf{modded-nanogpt}\footnote{\url{https://github.com/KellerJordan/modded-nanogpt}} 的项目——直译"魔改 nanoGPT"。这个 repo 本身是个比赛性质的开源工程，最初的目标只有一个：
+
+\begin{quote}
+\textit{在单台 8$\times$H100 节点上，把 GPT-2 训练到验证 loss 3.28，速度多快？}
+\end{quote}
+
+这个目标叫做 \textbf{NanoGPT speedrun}（速通）。Karpathy 的原版 nanoGPT 用 AdamW 训 GPT-2 大概要 45 分钟到验证 loss 3.28；modded-nanogpt 通过一系列优化把这个时间一路压到了几分钟。Muon 就是这个过程中的核心改动之一。
+
+\subsection{Speedrun 是什么玩法}
+
+把训练当成游戏速通——和图 \ref{fig:speedrun-vibe} 类似的赛道思维：固定终点（val loss $\leq 3.28$），优化耗时，所有人在同一硬件配置（8$\times$H100）上比谁更快。
+
+\begin{center}
+\begin{tikzpicture}[scale=1.0]
+% 赛道
+\draw[line width=2pt, gray] (0, 0) -- (12, 0);
+\fill[gray!30] (0, -0.15) rectangle (12, 0.15);
+
+% 起点终点
+\fill[nsblue] (0, 0) circle (5pt);
+\node[below, nsblue] at (0, -0.3) {起点：随机初始化};
+\fill[jordanred] (12, 0) circle (5pt);
+\node[below, jordanred] at (12, -0.3) {终点：val loss $\leq 3.28$};
+
+% 各阶段标记
+\foreach \x/\t/\v in {
+    1.5/{原版 nanoGPT (AdamW)}/{45 min},
+    4/{+ Muon (Newton-Schulz)}/{15 min},
+    7/{+ 架构改进}/{8 min},
+    9.5/{+ Polar Express}/{?},
+    11/{当前最快}/{$<5$ min}
+} {
+    \fill[peorange] (\x, 0) circle (3pt);
+    \node[above, font=\scriptsize, align=center] at (\x, 0.15) {\t};
+    \node[below, font=\scriptsize, peorange] at (\x, -0.55) {\v};
+}
+
+\node[above, font=\large] at (6, 1.0) {NanoGPT Speedrun 进化史（示意）};
+\end{tikzpicture}
+\end{center}
+\addtocounter{figure}{1}
+\label{fig:speedrun-vibe}
+
+\textbf{为啥这件事重要？} 速通带来的好处不只是"训得快"：
+\begin{itemize}
+\item \textbf{研究效率}：训练 cycle 越短，研究者能跑的 ablation 越多，迭代越快。
+\item \textbf{基础设施基线}：speedrun 是个公开 leaderboard，所有人都能比较自己的优化器、kernel、架构改动到底有没有真实收益。
+\item \textbf{方法论筛选}：能在 speedrun 上活下来的技巧基本都是真有用的——毕竟谁都骗不了 wall clock。
+\end{itemize}
+
+Muon 就是这样从 speedrun 里"杀"出来的——Jordan 设计 Muon 时就是为了把 speedrun 时间再压一刀。结果不仅压成了，还发现 Muon 在更大模型上也 work，于是有了后来 Kimi K2 这种规模上的应用。
+
+\subsection{Muon 在 modded-nanogpt 里的角色}
+
+Modded-nanogpt 的训练规则是这样的：
+\begin{itemize}
+\item \textbf{Embeddings, unembeddings, 位置编码}用 AdamW 训。
+\item \textbf{所有其他 $\geq 2$ 维参数}用 Muon 训。
+\end{itemize}
+
+为啥这么分？因为 Muon 的"把所有奇异值映射到 1"这个操作，对 embedding 这种本来就是 lookup 表的东西没意义——embedding 的列向量长度有信息含量，不能强行抹掉。但对 attention 和 MLP 的权重矩阵，Muon 的几何（spectral steepest descent）天然合适。
+
+\begin{center}
+\begin{tikzpicture}[
+    layer/.style={draw, rounded corners=2pt, minimum width=3.5cm, minimum height=0.7cm, font=\small},
+    arrow/.style={->, line width=0.8pt}
+]
+% Transformer 块结构
+\node[layer, fill=shadeblue] (emb) at (0, 0) {Token Embedding};
+\node[layer, fill=shadeorange] (attn) at (0, -1) {Attention 权重 ($W_Q, W_K, W_V, W_O$)};
+\node[layer, fill=shadeorange] (mlp) at (0, -2) {MLP 权重};
+\node[layer, fill=shadeblue] (unemb) at (0, -3) {Unembedding};
+
+% 标注
+\node[right, font=\small] at (2, 0) {\textcolor{nsblue}{AdamW}};
+\node[right, font=\small] at (2, -1) {\textcolor{peorange}{\textbf{Muon}}};
+\node[right, font=\small] at (2, -2) {\textcolor{peorange}{\textbf{Muon}}};
+\node[right, font=\small] at (2, -3) {\textcolor{nsblue}{AdamW}};
+
+% 大括号
+\draw [decorate, decoration={brace, amplitude=5pt}] 
+    (4.8, -0.7) -- (4.8, -2.3) 
+    node[midway, right, xshift=8pt, font=\small, align=left] 
+    {主要参数量\\Muon 受益最大};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Polar Express 进 modded-nanogpt}
+
+文章作者把 Polar Express 提交到 modded-nanogpt 后被合并进了官方 repo——这是一个非常典型的"理论-实践"完整闭环：
+\begin{enumerate}
+\item Jordan 在 speedrun 里靠 grid search 找了个非收敛但前期快的多项式（Section 3）。
+\item Polar Express 发现"前期快"和"收敛"其实可以同时拿到（Theorem 3.1），并且实现极其简单（30 行 PyTorch）。
+\item 在 GPT-2 训练上验证了一致更优，于是被并入 speedrun 的官方实现。
+\end{enumerate}
+
+\subsection{对你的实践意义}
+
+如果你自己想用 Muon 训模型，目前最干净的路径是：
+
+\begin{enumerate}
+\item 直接 clone modded-nanogpt 看代码——Muon 优化器 + Polar Express 的实现都在里面。
+\item 把它的 Muon 类抠出来用到自己模型上。注意三件事：
+\begin{itemize}
+\item 区分 Muon 参数和 AdamW 参数（embedding 之类要排除）。
+\item 学习率比 AdamW 大一个量级（典型 $10^{-2}$ 量级）。
+\item 用 5--6 步 Polar Express，再多没用（论文 Figure 5 的 ablation）。
+\end{itemize}
+\item 如果模型是 transformer，权重矩阵长宽比大于 4，可以考虑论文 Appendix J 的"分头并行"trick——不过那个收益要 embedding $\geq 1280$ 的大模型才看得出。
+\end{enumerate}
+
+\textbf{一句话总结}：modded-nanogpt 是 Muon 的孵化器和验证场，Polar Express 是这个孵化器最近一次升级的核心算法贡献。两者绑在一起，让"用多项式逼近 polar 分解"这个老问题在 LLM 训练这个新场景里焕发了生命力。
+
+\section{背景：Muon 里那个 polar(M) 是啥}
+
+Muon 优化器的更新规则是：
+\[
+W_{t+1} = W_t - \lambda \cdot \mathrm{polar}(M_t)
+\]
+其中 $M_t$ 是动量，$\mathrm{polar}(M)$ 把矩阵的 SVD $M = U\Sigma V^\top$ 中的奇异值\textbf{全部映射到 1}：
+\[
+\mathrm{polar}(M) = U V^\top
+\]
+
+\begin{center}
+\begin{tikzpicture}[scale=1.2]
+\draw[->, thick] (-0.3, 0) -- (4.5, 0) node[right] {$x$ (奇异值)};
+\draw[->, thick] (0, -0.3) -- (0, 2.5) node[above] {映射后的值};
+\draw[dashed, gray] (0, 1.5) -- (4.3, 1.5) node[right, black] {1};
+\foreach \x in {0.3, 0.5, 0.8, 1.5, 2.5, 3.8} {
+    \fill[nsblue] (\x, 0.05) circle (2pt);
+}
+\node[below, nsblue] at (2, -0.3) {初始奇异值散布在 $[\ell, u]$};
+\draw[->, thick, peorange, line width=1.2pt] (2, 0.5) -- (2, 1.3);
+\node[right, peorange] at (2.1, 0.9) {希望全部推到 1};
+\foreach \x in {0.3, 0.5, 0.8, 1.5, 2.5, 3.8} {
+    \fill[peorange] (\x, 1.5) circle (2pt);
+}
+\end{tikzpicture}
+\end{center}
+
+\textbf{为啥不直接 SVD？} GPU 不喜欢——SVD 不是矩阵乘法、并行度差。我们要用\textbf{只含矩阵乘法}的方法：迭代多项式。
+
+对一个 odd 多项式 $p(x) = ax + bx^3 + cx^5$，作用到矩阵上等价于：
+\[
+p(M) = a M + b M(M^\top M) + c M(M^\top M)^2
+\]
+全是 matmul，GPU 友好。每一次迭代相当于在每个奇异值上独立地作用一次 $p$。
+
+\section{Newton-Schulz：经典做法}
+
+最经典的是 Newton-Schulz 迭代。每一步用同一个 odd 多项式，反复作用：
+\[
+X_{t+1} = p_{NS}(X_t)
+\]
+
+\textbf{两个常用版本}：
+\begin{itemize}
+\item \textbf{Degree 3}：$p_{NS}^{(3)}(x) = \frac{3}{2} x - \frac{1}{2} x^3$
+\item \textbf{Degree 5}：$p_{NS}^{(5)}(x) = \frac{15}{8} x - \frac{10}{8} x^3 + \frac{3}{8} x^5$
+\end{itemize}
+
+它们都满足 $p(1) = 1$ 且导数在 $x = 1$ 处为 0（degree 5 的甚至二阶导也为 0），所以 $x = 1$ 是\textbf{超稳定不动点}。
+
+\subsection{两种 NS 多项式的形态对比}
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=12cm, height=6.5cm,
+    xmin=0, xmax=1.3, ymin=-0.05, ymax=1.55,
+    xlabel={$x$}, ylabel={$p(x)$},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=south east,
+    title={两种 Newton-Schulz 多项式}
+]
+\addplot[domain=0:1.25, samples=200, nsblue, line width=1.3pt]
+    {1.5*x - 0.5*x^3};
+\addlegendentry{Degree 3：$\frac{3}{2}x - \frac{1}{2}x^3$};
+
+\addplot[domain=0:1.25, samples=200, nsgreen, line width=1.3pt, dashed]
+    {1.875*x - 1.25*x^3 + 0.375*x^5};
+\addlegendentry{Degree 5：$\frac{15}{8}x - \frac{10}{8}x^3 + \frac{3}{8}x^5$};
+
+\addplot[domain=0:1.3, samples=2, dotted, gray] {1};
+
+\fill[black] (axis cs: 1, 1) circle (2pt);
+\node[above right] at (axis cs: 1, 1) {$p(1)=1$};
+
+% x=0 处斜率
+\node[right, font=\small] at (axis cs: 0.02, 0.13) {\textcolor{nsblue}{斜率 1.5}};
+\node[right, font=\small] at (axis cs: 0.02, 0.30) {\textcolor{nsgreen}{斜率 1.875}};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{关键差别}：
+\begin{itemize}
+\item Degree 5 在 $x \to 0$ 处的斜率更大（$1.875 > 1.5$），所以在小奇异值处放大得更快。
+\item Degree 5 的曲线"贴 $y=1$" 的台阶更宽——一次迭代能把更多 $x$ 推到接近 1。
+\item 但 degree 5 每步多一次矩阵乘法（计算 $X(X^\top X)^2$）。
+\end{itemize}
+
+\subsection{Degree-3 NS 复合 1\,--\,5 次}
+
+把 NS 自己跟自己复合：$p_{NS}^{(k)} = \underbrace{p_{NS} \circ \cdots \circ p_{NS}}_{k \text{ 次}}$。
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=14cm, height=8.5cm,
+    xmin=0, xmax=1.05, ymin=-0.05, ymax=1.15,
+    xlabel={$x$（输入奇异值）}, ylabel={$p_{NS}^{(k)}(x)$（$k$ 次 NS 后的值）},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=south east,
+    legend cell align={left},
+    title={Degree-3 NS 复合 $k$ 次：$p(x) = \frac{3}{2}x - \frac{1}{2}x^3$}
+]
+% 用 ns3 宏递归复合
+\addplot[domain=0:1.02, samples=300, nsblue!25, line width=1pt]
+    {ns3(x)};
+\addlegendentry{$k=1$};
+
+\addplot[domain=0:1.02, samples=400, nsblue!45, line width=1pt]
+    {ns3(ns3(x))};
+\addlegendentry{$k=2$};
+
+\addplot[domain=0:1.02, samples=500, nsblue!65, line width=1pt]
+    {ns3(ns3(ns3(x)))};
+\addlegendentry{$k=3$};
+
+\addplot[domain=0:1.02, samples=600, nsblue!85, line width=1.1pt]
+    {ns3(ns3(ns3(ns3(x))))};
+\addlegendentry{$k=4$};
+
+\addplot[domain=0:1.02, samples=700, nsblue, line width=1.3pt]
+    {ns3(ns3(ns3(ns3(ns3(x)))))};
+\addlegendentry{$k=5$};
+
+\addplot[domain=0:1.05, samples=2, dashed, black] {1};
+
+% x = 0.1 这一列采样点
+\fill[jordanred] (axis cs: 0.1, 0.1495) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.222) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.327) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.473) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.657) circle (2.5pt);
+
+\draw[dashed, jordanred, thin] (axis cs: 0.1, 0) -- (axis cs: 0.1, 1.05);
+\node[below, jordanred, font=\small] at (axis cs: 0.1, 0) {$x=0.1$};
+
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.1495) {$k=1: 0.15$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.222) {$k=2: 0.22$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.327) {$k=3: 0.33$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.473) {$k=4: 0.47$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.657) {$k=5: 0.66$};
+
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{怎么读这张图}：颜色由浅到深 = 复合次数 1 到 5。每条曲线告诉你"$k$ 次 NS 后，输入 $x$ 变成了多少"。
+
+\textbf{$x=0.1$ 这一列追踪}（红点）：
+\[
+0.1 \xrightarrow{\text{NS}} 0.15 \xrightarrow{\text{NS}} 0.22 \xrightarrow{\text{NS}} 0.33 \xrightarrow{\text{NS}} 0.47 \xrightarrow{\text{NS}} 0.66
+\]
+跑了 5 次还没到 1！Degree 3 NS 在小 $x$ 处推进非常缓慢。
+
+\subsection{Degree-5 NS 复合 1\,--\,5 次}
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=14cm, height=8.5cm,
+    xmin=0, xmax=1.05, ymin=-0.05, ymax=1.15,
+    xlabel={$x$（输入奇异值）}, ylabel={$p_{NS}^{(k)}(x)$},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=south east,
+    legend cell align={left},
+    title={Degree-5 NS 复合 $k$ 次：$p(x) = \frac{15}{8}x - \frac{10}{8}x^3 + \frac{3}{8}x^5$}
+]
+\addplot[domain=0:1.02, samples=300, nsgreen!25, line width=1pt]
+    {ns5(x)};
+\addlegendentry{$k=1$};
+
+\addplot[domain=0:1.02, samples=400, nsgreen!45, line width=1pt]
+    {ns5(ns5(x))};
+\addlegendentry{$k=2$};
+
+\addplot[domain=0:1.02, samples=500, nsgreen!65, line width=1pt]
+    {ns5(ns5(ns5(x)))};
+\addlegendentry{$k=3$};
+
+\addplot[domain=0:1.02, samples=600, nsgreen!85, line width=1.1pt]
+    {ns5(ns5(ns5(ns5(x))))};
+\addlegendentry{$k=4$};
+
+\addplot[domain=0:1.02, samples=700, nsgreen, line width=1.3pt]
+    {ns5(ns5(ns5(ns5(ns5(x)))))};
+\addlegendentry{$k=5$};
+
+\addplot[domain=0:1.05, samples=2, dashed, black] {1};
+
+% x = 0.1 追踪点
+\fill[jordanred] (axis cs: 0.1, 0.1875) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.349) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.631) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.963) circle (2.5pt);
+\fill[jordanred] (axis cs: 0.1, 0.99987) circle (2.5pt);
+
+\draw[dashed, jordanred, thin] (axis cs: 0.1, 0) -- (axis cs: 0.1, 1.05);
+\node[below, jordanred, font=\small] at (axis cs: 0.1, 0) {$x=0.1$};
+
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.1875) {$k=1: 0.19$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.349) {$k=2: 0.35$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.631) {$k=3: 0.63$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 0.963) {$k=4: 0.96$};
+\node[right, font=\scriptsize] at (axis cs: 0.13, 1.04) {$k=5: 1.00$};
+
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{$x=0.1$ 这一列追踪}：
+\[
+0.1 \xrightarrow{\text{NS}_5} 0.19 \xrightarrow{\text{NS}_5} 0.35 \xrightarrow{\text{NS}_5} 0.63 \xrightarrow{\text{NS}_5} 0.96 \xrightarrow{\text{NS}_5} 1.00
+\]
+Degree 5 显著比 degree 3 快——5 步基本就到 1 了。这就是为啥实践中大家都用 degree 5。
+
+\subsection{两个版本的"台阶"对比}
+
+把两个 degree 复合 5 次后的曲线叠在一起，能看清差距：
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=13cm, height=7cm,
+    xmin=0, xmax=1.02, ymin=-0.05, ymax=1.1,
+    xlabel={$x$}, ylabel={$p^{(5)}(x)$},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=south east,
+    title={5 次复合后：degree 3 vs degree 5}
+]
+\addplot[domain=0:1.02, samples=600, nsblue, line width=1.3pt]
+    {ns3(ns3(ns3(ns3(ns3(x)))))};
+\addlegendentry{Degree 3，5 次复合};
+
+\addplot[domain=0:1.02, samples=600, nsgreen, line width=1.3pt]
+    {ns5(ns5(ns5(ns5(ns5(x)))))};
+\addlegendentry{Degree 5，5 次复合};
+
+\addplot[domain=0:1.02, samples=2, dashed, black] {1};
+
+% 标注 0.1 处
+\draw[dashed, jordanred, thin] (axis cs: 0.1, 0) -- (axis cs: 0.1, 1.05);
+\fill[jordanred] (axis cs: 0.1, 0.657) circle (2.5pt) node[right, font=\small] {0.66};
+\fill[jordanred] (axis cs: 0.1, 0.99987) circle (2.5pt) node[right, font=\small] {1.00};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+Degree 5 把"已收敛"的范围拓展到约 $x \geq 0.1$，而 degree 3 还在 $x = 0.1$ 处只爬到 $0.66$。
+
+\subsection{NS 的本质问题：小 $x$ 处放大倍数有上限}
+
+为啥小 $x$ 这么慢？看每个 NS 多项式在 $x \to 0$ 处能"放大几倍"：
+
+\[
+\lim_{x \to 0} \frac{p_{NS}^{(3)}(x)}{x} = \frac{3}{2}, \qquad
+\lim_{x \to 0} \frac{p_{NS}^{(5)}(x)}{x} = \frac{15}{8} = 1.875
+\]
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=12cm, height=6cm,
+    xmin=0, xmax=1.05, ymin=0, ymax=2.1,
+    xlabel={$x$}, ylabel={$p_{NS}(x)/x$（放大倍数）},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=north east,
+    title={NS 在每个 $x$ 上的"放大倍数"}
+]
+\addplot[domain=0.01:1.02, samples=200, nsblue, line width=1.2pt]
+    {1.5 - 0.5*x^2};
+\addlegendentry{Degree 3：上限 1.5};
+
+\addplot[domain=0.01:1.02, samples=200, nsgreen, line width=1.2pt, dashed]
+    {1.875 - 1.25*x^2 + 0.375*x^4};
+\addlegendentry{Degree 5：上限 1.875};
+
+\addplot[domain=0:1.05, samples=2, dotted, gray] {1};
+\node[above, gray, font=\small] at (axis cs: 0.5, 1.02) {不变（$y=1$）};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{NS 死板的根源}：无论 degree 多少，$x \to 0$ 处的放大倍数是\textbf{固定常数}。如果你的 $\sigma_{\min} = 10^{-3}$，degree-5 NS 第一步能把它推到 $\approx 1.875 \times 10^{-3}$——还是很小。
+
+\textbf{Polar Express 的核心想法}：何必死守这个常数？\textbf{第一步就用更大的放大倍数！}
+
+\section{Jordan 的野路子：为速度牺牲收敛性}
+
+Muon 的开发者 Jordan 想：训 LLM 不需要把 polar 算特别准，能不能找个多项式\textbf{前期更猛}？他在 GPU 上 grid search 调出：
+\[
+p_{J}(x) = 3.4445 x - 4.7750 x^3 + 2.0315 x^5
+\]
+小 $x$ 处放大 $3.4445$ 倍，比 NS 的 $1.875$ 大近一倍。
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=12cm, height=7cm,
+    xmin=0, xmax=1.3, ymin=-0.1, ymax=1.8,
+    xlabel={$x$}, ylabel={$p(x)$},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=south east,
+    title={Jordan vs Newton-Schulz（degree 5）}
+]
+\addplot[domain=0:1.2, samples=200, nsgreen, line width=1.2pt]
+    {ns5(x)};
+\addlegendentry{NS-5};
+\addplot[domain=0:1.2, samples=200, jordanred, line width=1.2pt]
+    {3.4445*x - 4.7750*x^3 + 2.0315*x^5};
+\addlegendentry{Jordan};
+\addplot[domain=0:1.3, samples=2, dashed, gray] {1};
+
+\fill[nsgreen] (axis cs: 0.1, 0.1875) circle (2pt);
+\fill[jordanred] (axis cs: 0.1, 0.3417) circle (2pt);
+\node[right, font=\small] at (axis cs: 0.12, 0.1875) {NS: 0.19};
+\node[right, font=\small] at (axis cs: 0.12, 0.41) {Jordan: 0.34};
+
+\fill[black] (axis cs: 1, 1) circle (2pt) node[above right, font=\small] {NS: $p(1)=1$};
+\fill[jordanred] (axis cs: 1, 0.701) circle (2pt) node[below right, font=\small, jordanred] {Jordan: $p(1) \neq 1$};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{致命代价}：Jordan 多项式不满足 $p(1) = 1$！它在 $x = 1$ 附近震荡，没有不动点。
+
+\textbf{后果}：迭代会卡在某个误差 $\approx 0.3$ 的水平不再下降——\textbf{Jordan 方法根本不收敛}，只是"前几步快"。You 的方法（用 6 个手调多项式轮流用）类似，不收敛但更快。
+
+这就引出 Polar Express 的核心问题：\textbf{能不能既前期快，又能收敛？}
+
+\section{Polar Express 的核心想法：每步换多项式}
+
+NS 的问题在于\textbf{每步都用同一个多项式}。如果\textbf{每一步换一个多项式}，针对当前奇异值所在的区间动态调整呢？
+
+\subsection{把问题写成数学优化}
+
+设奇异值在 $[\ell, u]$ 内。要找 $T$ 个 odd 多项式 $p_1, \ldots, p_T$，使得复合 $p = p_T \circ \cdots \circ p_1$ 满足
+\[
+\boxed{\min_{p_1, \ldots, p_T} \max_{x \in [\ell, u]} |1 - p(x)|}
+\]
+即：复合多项式在整个区间上最接近常数 1（worst-case 误差最小）。
+
+\subsection{贪心策略}
+
+\textbf{贪心}：每一步只看当前区间，挑当前最优的单步多项式。
+
+\begin{center}
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners=3pt, minimum width=3.2cm, minimum height=1cm, align=center},
+    arrow/.style={->, line width=1pt, peorange}
+]
+\node[box, fill=shadeblue] (b1) at (0, 0) {区间 $[\ell_1, u_1]$ \\ \small e.g. $[0.1, 1]$};
+\node[box, fill=shadeblue] (b2) at (4.5, 0) {区间 $[\ell_2, u_2]$ \\ \small e.g. $[0.39, 1.61]$};
+\node[box, fill=shadeblue] (b3) at (9, 0) {区间 $[\ell_3, u_3]$ \\ \small e.g. $[0.69, 1.31]$};
+\node[box, fill=shadeorange] (b4) at (11.5, -2.5) {接近 $\{1\}$ \\ \small e.g. $[0.93, 1.07]$};
+
+\draw[arrow] (b1) -- node[above] {$p_1$} (b2);
+\draw[arrow] (b2) -- node[above] {$p_2$} (b3);
+\draw[arrow] (b3) -- node[right] {$p_3$} (b4);
+
+\node[below, align=center, font=\small] at (b1.south) {在此区间上\\找最优 $p_1$};
+\node[below, align=center, font=\small] at (b2.south) {在此区间上\\找最优 $p_2$};
+\node[below, align=center, font=\small] at (b3.south) {在此区间上\\找最优 $p_3$};
+\end{tikzpicture}
+\end{center}
+
+每一步的任务：
+\[
+p_t = \arg\min_{p \in \mathbb{P}_d^{\text{odd}}} \max_{x \in [\ell_t, u_t]} |1 - p(x)|
+\]
+然后新区间 $[\ell_{t+1}, u_{t+1}] = [p_t(\ell_t), \max_{[\ell_t, u_t]} p_t]$。
+
+\textbf{核心定理}（文章 Theorem 3.1）：贪心 = 全局最优。
+
+\section{每步的最优多项式：等振荡}
+
+\subsection{为啥必然"振荡"}
+
+在区间 $[\ell, u]$ 上找 odd cubic $p(x) = ax + bx^3$ 逼近常数 1，最优解\textbf{必然在 3 个点上交替达到 $\pm$ 最大误差}。这叫 equioscillation。
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=12cm, height=7cm,
+    xmin=-0.05, xmax=1.1, ymin=-0.1, ymax=1.8,
+    xlabel={$x$}, ylabel={$p(x)$},
+    grid=major, grid style={lightgray, dashed},
+    title={最优 odd cubic 在 $[0.1, 1]$ 上逼近 1（等振荡）}
+]
+\addplot[domain=0:1.05, samples=200, peorange, line width=1.5pt]
+    {3.9636*x - 3.5707*x^3};
+\addplot[domain=-0.05:1.1, samples=2, dashed, gray] {1};
+
+% 误差带
+\addplot[domain=0.1:1, samples=200, name path=upper, draw=none] {1.6071};
+\addplot[domain=0.1:1, samples=200, name path=lower, draw=none] {0.3929};
+\addplot[shadeorange, opacity=0.3] fill between [of=upper and lower];
+
+% 等振荡三点
+\fill[jordanred] (axis cs: 0.1, 0.3929) circle (3pt);
+\node[below right, jordanred, font=\small] at (axis cs: 0.1, 0.3929) {$p(\ell)=1-E$};
+\fill[jordanred] (axis cs: 0.6083, 1.6073) circle (3pt);
+\node[above, jordanred, font=\small] at (axis cs: 0.6083, 1.6073) {$p(x^*)=1+E$};
+\fill[jordanred] (axis cs: 1, 0.3929) circle (3pt);
+\node[below right, jordanred, font=\small] at (axis cs: 1, 0.3929) {$p(u)=1-E$};
+
+\draw[<->, jordanred, thick] (axis cs: 0.05, 1) -- (axis cs: 0.05, 1.6073);
+\node[left, jordanred, font=\small] at (axis cs: 0.04, 1.3) {$E$};
+\draw[<->, jordanred, thick] (axis cs: 0.05, 0.3929) -- (axis cs: 0.05, 1);
+\node[left, jordanred, font=\small] at (axis cs: 0.04, 0.7) {$E$};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{物理直觉}：如果误差不是这样"摸着上下界"，你总能稍微调一下让最大误差变小——也就是说还没到极限。最优解必然把误差压到极限。
+
+\subsection{对称性带来奇迹（Lemma C.2）}
+
+由等振荡 + odd 函数的性质：
+\begin{itemize}
+\item $\ell$ 必是 $p^\star$ 的最小值点
+\item $\max p^\star = 2 - p^\star(\ell)$（关于 1 对称）
+\item 最大误差 $E = 1 - p^\star(\ell)$
+\end{itemize}
+
+也就是说，应用 $p^\star$ 后\textbf{新区间总是关于 1 对称}：
+\[
+[\ell_{t+1}, u_{t+1}] = [p^\star(\ell_t),\ 2 - p^\star(\ell_t)]
+\]
+
+\begin{center}
+\begin{tikzpicture}[scale=1.0]
+\draw[->, thick] (-0.5, 0) -- (8.5, 0);
+\node[right] at (8.5, 0) {$x$};
+\fill[gray] (4, 0) circle (2pt);
+\node[below] at (4, -0.1) {$1$};
+
+\draw[line width=2pt, nsblue] (0.5, 1) -- (7.5, 1);
+\fill[nsblue] (0.5, 1) circle (3pt) node[above] {$\ell_t$};
+\fill[nsblue] (7.5, 1) circle (3pt) node[above] {$u_t$};
+\node[left, nsblue] at (0.4, 1) {旧区间:};
+
+\draw[->, very thick, peorange] (4, 0.85) -- (4, 0.55);
+\node[right, peorange] at (4.1, 0.7) {$p_t$};
+
+\draw[line width=2pt, peorange] (2.5, 0.4) -- (5.5, 0.4);
+\fill[peorange] (2.5, 0.4) circle (3pt) node[below] {$\ell_{t+1}$};
+\fill[peorange] (5.5, 0.4) circle (3pt) node[below] {$u_{t+1}$};
+\node[left, peorange] at (2.4, 0.4) {新区间:};
+
+\draw[<->, dashed, jordanred, thick] (2.5, 0.15) -- (4, 0.15) -- (5.5, 0.15);
+\node[below, jordanred] at (4, 0.05) {\small 关于 1 对称：$\ell_{t+1} + u_{t+1} = 2$};
+\end{tikzpicture}
+\end{center}
+
+\subsection{为啥贪心 = 最优？}
+
+因为这种对称性，"让当前误差最小" 和 "给未来留下最好状态" 是\textbf{同一件事}：
+\begin{align*}
+&\text{最小化当前误差 } 1 - \ell_{t+1} \\
+\Longleftrightarrow\quad &\text{最大化 } \ell_{t+1} \\
+\Longleftrightarrow\quad &\text{最小化 } u_{t+1} \\
+\Longleftrightarrow\quad &\text{最小化区间宽度 } u_{t+1} - \ell_{t+1}
+\end{align*}
+
+所以贪心\textbf{不存在"短视"问题}。
+
+\section{具体算一遍：$\ell = 0.1, u = 1, T = 3$}
+
+用 degree-3 闭式解（文章公式 17）：
+\[
+p(x) = \beta \cdot p_{NS}^{(3)}(\alpha x), \quad \alpha = \sqrt{\tfrac{3}{u^2 + \ell u + \ell^2}}, \quad \beta = \tfrac{4}{2 + \ell u(\ell + u) \alpha^3}
+\]
+
+\begin{itemize}
+\item \textbf{第 1 步}：$[0.1, 1]$，$\alpha_1 \approx 1.644$，$\beta_1 \approx 1.607$，
+\[
+p_1(x) \approx 3.964 x - 3.571 x^3
+\]
+应用后：$\ell_2 = 0.393, u_2 = 1.607$。
+
+\item \textbf{第 2 步}：$[0.393, 1.607]$，
+\[
+p_2(x) \approx 1.850 x - 0.549 x^3
+\]
+应用后：$\ell_3 = 0.693, u_3 = 1.307$。
+
+\item \textbf{第 3 步}：$[0.693, 1.307]$，
+\[
+p_3(x) \approx 1.584 x - 0.512 x^3
+\]
+应用后：$\ell_4 = 0.928, u_4 = 1.072$。
+\end{itemize}
+
+\subsection{Polar Express 三个多项式的画像}
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=14cm, height=8cm,
+    xmin=0, xmax=1.7, ymin=-0.05, ymax=1.8,
+    xlabel={$x$}, ylabel={$p_t(x)$},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=north west,
+    title={Polar Express 的三个多项式（不同区间上的最优）}
+]
+\addplot[domain=0:1.05, samples=200, peorange, line width=1.3pt]
+    {3.9636*x - 3.5707*x^3};
+\addlegendentry{$p_1$ on $[0.1, 1]$};
+
+\addplot[domain=0:1.65, samples=200, jordanred, line width=1.3pt, dashed]
+    {1.8497*x - 0.5491*x^3};
+\addlegendentry{$p_2$ on $[0.39, 1.61]$};
+
+\addplot[domain=0:1.4, samples=200, nsblue, line width=1.3pt, dotted]
+    {1.5839*x - 0.5119*x^3};
+\addlegendentry{$p_3$ on $[0.69, 1.31]$};
+
+\addplot[domain=0:1.4, samples=200, gray, line width=0.8pt]
+    {ns3(x)};
+\addlegendentry{Newton-Schulz (degree 3)};
+
+\addplot[domain=0:1.7, samples=2, dashed, black] {1};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{观察}：
+\begin{itemize}
+\item $p_1$（橙色）系数最大、最"激进"——它要把宽广的 $[0.1, 1]$ 一次推到 1 附近。看小 $x$ 处的斜率：$p_1'(0) \approx 3.96$，比 NS 的 $1.5$ 大 2.6 倍！
+\item $p_3$（蓝色虚线）几乎就是 NS——区间已经接近 $[1, 1]$，不需要那么激进。
+\item Polar Express 的精髓：\textbf{动态调整放大倍数}，初期用大倍数，后期用小倍数。
+\end{itemize}
+
+\subsection{区间是怎么收缩的}
+
+\begin{center}
+\begin{tikzpicture}[scale=1.3]
+\foreach \y in {0, 1, 2, 3} {
+    \draw[->, thick] (-0.3, -\y) -- (4.5, -\y);
+    \draw[dashed, gray, thin] (1, -\y - 0.1) -- (1, -\y + 0.4);
+}
+
+\draw[line width=3pt, nsblue] (0.1, 0) -- (4, 0);
+\fill[nsblue] (0.1, 0) circle (2pt);
+\fill[nsblue] (4, 0) circle (2pt);
+\node[left, font=\small] at (-0.4, 0) {$t=0$:};
+\node[above, font=\small] at (0.1, 0) {0.1};
+\node[above, font=\small] at (4, 0) {1.0};
+\node[right, font=\small] at (4.6, 0) {误差 $= 0.9$};
+
+\draw[line width=3pt, peorange] (1.572, -1) -- (6.428, -1);
+\fill[peorange] (1.572, -1) circle (2pt);
+\fill[peorange] (6.428, -1) circle (2pt);
+\node[left, font=\small] at (-0.4, -1) {$t=1$:};
+\node[above, font=\small] at (1.572, -1) {0.39};
+\node[above, font=\small] at (6.428, -1) {1.61};
+\node[right, font=\small] at (6.6, -1) {误差 $= 0.61$};
+
+\draw[line width=3pt, jordanred] (2.772, -2) -- (5.228, -2);
+\fill[jordanred] (2.772, -2) circle (2pt);
+\fill[jordanred] (5.228, -2) circle (2pt);
+\node[left, font=\small] at (-0.4, -2) {$t=2$:};
+\node[above, font=\small] at (2.772, -2) {0.69};
+\node[above, font=\small] at (5.228, -2) {1.31};
+\node[right, font=\small] at (6.6, -2) {误差 $= 0.31$};
+
+\draw[line width=3pt, black] (3.712, -3) -- (4.288, -3);
+\fill[black] (3.712, -3) circle (2pt);
+\fill[black] (4.288, -3) circle (2pt);
+\node[left, font=\small] at (-0.4, -3) {$t=3$:};
+\node[above, font=\small] at (3.712, -3) {0.93};
+\node[above, font=\small] at (4.288, -3) {1.07};
+\node[right, font=\small] at (6.6, -3) {误差 $= 0.07$};
+\end{tikzpicture}
+\end{center}
+
+每一步区间都\textbf{关于 1 对称地收缩}（这就是 Lemma C.2 的对称性）。
+
+\subsection{Polar Express vs NS：从 $\ell_0 = 0.1$ 出发}
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    width=13cm, height=7cm,
+    xmin=0, xmax=8, ymin=0, ymax=1.05,
+    xlabel={迭代步数}, ylabel={最小奇异值 $\ell_t$},
+    grid=major, grid style={lightgray, dashed},
+    legend pos=south east,
+    title={从 $\ell_0 = 0.1$ 出发：$\ell_t$ 怎么爬到 1}
+]
+\addplot[peorange, mark=triangle*, mark size=3pt, line width=1.3pt]
+coordinates {
+    (0, 0.1) (1, 0.393) (2, 0.693) (3, 0.928) (4, 0.997) (5, 0.99999) (6, 1) (7, 1) (8, 1)
+};
+\addlegendentry{Polar Express (degree 3)};
+
+\addplot[nsgreen, mark=square*, mark size=2.5pt, line width=1.2pt]
+coordinates {
+    (0, 0.1) (1, 0.1875) (2, 0.349) (3, 0.631) (4, 0.963) (5, 0.99987) (6, 1) (7, 1) (8, 1)
+};
+\addlegendentry{NS-5};
+
+\addplot[nsblue, mark=*, mark size=2pt, line width=1.2pt]
+coordinates {
+    (0, 0.1) (1, 0.1495) (2, 0.222) (3, 0.327) (4, 0.473) (5, 0.657) (6, 0.842) (7, 0.967) (8, 0.999)
+};
+\addlegendentry{NS-3};
+
+\addplot[domain=0:8, samples=2, dashed, gray] {1};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{观察}：
+\begin{itemize}
+\item PE 第 1 步把 0.1 推到 0.39，比 NS-5 的 0.19 快了一倍多。
+\item PE 4 步基本收敛；NS-5 需要 5 步；NS-3 需要 8 步。
+\item PE-3（degree 3）能跟 NS-5（degree 5）比，意味着用更低 degree 也能拿到 NS-5 的速度——节省每步的计算量。
+\end{itemize}
+
+\section{总结}
+
+\begin{center}
+\begin{tabular}{|l|c|c|c|}
+\hline
+方法 & 每步多项式 & 收敛性 & 前期速度 \\
+\hline
+NS (degree 3) & 固定（$\frac{3}{2}, -\frac{1}{2}$） & 收敛到机器精度 & 慢 \\
+NS (degree 5) & 固定（$\frac{15}{8}, -\frac{10}{8}, \frac{3}{8}$） & 收敛到机器精度 & 中等 \\
+Jordan & 固定（grid search） & \textbf{不收敛}（卡 $\approx 0.3$） & 快 \\
+You & 6 个 hand-tuned & \textbf{不收敛} & 略快于 Jordan \\
+\textbf{Polar Express} & \textbf{每步动态最优} & 收敛 & \textbf{快} \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Polar Express 三个核心 idea}：
+\begin{enumerate}
+\item \textbf{每步换多项式}（不像 NS 死板）。
+\item \textbf{每步的多项式由 minimax 优化得出}（不像 Jordan/You 是 grid search 蒙的）。
+\item \textbf{贪心 = 全局最优}（依赖等振荡定理 + odd 多项式空间的对称性）。
+\end{enumerate}
+
+加上 bfloat16 数值稳定 trick（safety factor、cushioning），就成了一个 30 行 PyTorch、可以直接替换 Muon 里 polar 计算的 drop-in module。
+
+\end{document}

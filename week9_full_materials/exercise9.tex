@@ -1,0 +1,79 @@
+\documentclass[11pt]{ctexart}
+
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\usepackage{enumitem}
+\geometry{margin=1in}
+
+\title{第 9 周习题：隐式偏好与极分解}
+\author{深度学习优化理论}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{习题 9.1：深度 2 的奇异值演化方程}
+
+设 $W = W_2 W_1$，$W_1, W_2 \in \mathbb{R}^{d\times d}$，损失 $L = \tfrac{1}{2}\|W - Y\|_F^2$，残差 $R = W - Y$。梯度流 $\dot W_j = -\partial L / \partial W_j$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 用链式法则证明
+    \[
+        \dot W_1 = -W_2^\top R, \qquad \dot W_2 = -R W_1^\top.
+    \]
+
+    \item 用乘积法则计算 $\dot W = \dot W_2 W_1 + W_2 \dot W_1$，证明
+    \[
+        \dot W = -R \, W_1^\top W_1 - W_2 W_2^\top \, R.
+    \]
+
+    \item 假设平衡初始化 $W_1^\top W_1 = W_2 W_2^\top =: \Sigma$（这条件在梯度流下守恒，本题不要求证明），且 $W$ 与 $Y$ 在共同奇异基下对角化。设 $W$ 第 $r$ 个奇异值为 $\sigma_r$，$y_r = u_r^\top Y v_r$。证明
+    \[
+        \dot \sigma_r = -2\sigma_r(\sigma_r - y_r).
+    \]
+
+    \textbf{提示}：在该奇异基下 $\Sigma = \mathrm{diag}(\sigma_r)$，$R$ 的对角元为 $\sigma_r - y_r$。把 (b) 投影到 $u_r v_r^\top$ 方向。
+\end{enumerate}
+
+\section*{习题 9.2：$N \to \infty$ 极限的奇异值动力学}
+
+由讲义 §2.5.6，深度 $N$ 网络的奇异值方程为
+\[
+    \dot\sigma_r = -N \, \sigma_r^{2 - 2/N} \, (\sigma_r - y_r).
+\]
+
+\begin{enumerate}[label=(\alph*)]
+    \item 引入 $\tau = N t$，证明 $N \to \infty$ 极限方程为
+    \[
+        \frac{d\sigma}{d\tau} = -\sigma^2 (\sigma - y), \tag{$\star$}
+    \]
+    （省略下标 $r$）。简述（$\leq 30$ 字）这个 rescale 的物理含义。
+
+    \item 对\textbf{任务无关方向} $y = 0$，($\star$) 退化为 $\dot\sigma = -\sigma^3$。从 $\sigma(0) = \varepsilon$ 出发，分离变量解出
+    \[
+        \sigma(\tau) = \frac{\varepsilon}{\sqrt{1 + 2\varepsilon^2 \tau}}.
+    \]
+    说明：当 $\varepsilon$ 小时，$\sigma(\tau)$ 在任意有限 $\tau$ 内\textbf{永远 $\leq \varepsilon$}——这就是无穷深网络的低秩偏好（无信号方向永久冻结在小值附近）。
+\end{enumerate}
+
+\section*{习题 9.3：Newton-Schulz 与 Polar Express}
+
+Muon 用奇多项式迭代 $X_{t+1} = p[X_t]$ 计算极因子。Newton-Schulz 用 $p_{NS}(x) = \tfrac{3}{2} x - \tfrac{1}{2} x^3$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 直接展开右边，验证恒等式
+    \[
+        1 - p_{NS}(x) = \tfrac{1}{2}(1 - x)^2 (2 + x).
+    \]
+    推出：当 $|1 - x| \leq \delta$ 时 $|1 - p_{NS}(x)| \leq \tfrac{3}{2}\delta^2$（\textbf{接近 1 时二次收敛}）。但当 $x$ 小时 $p_{NS}(x) \approx \tfrac{3}{2} x$，\textbf{只线性放大 1.5 倍}——这是 NS 的瓶颈。
+
+    \item Polar Express 的想法：每步根据当前奇异值区间重新选最优多项式 $p(x) = a x + b x^3$。对区间 $[0.5, 1]$，要求三点等振
+    \[
+        1 - p(0.5) = +E, \quad 1 - p(0.75) = -E, \quad 1 - p(1) = +E.
+    \]
+    写出 $3 \times 3$ 线性方程组求解 $a, b, E$。
+
+    \textbf{参考解}：$a \approx 1.95,\ b \approx -0.85,\ E \approx 0.06$。对比 NS 在 $[0.5, 1]$ 上的最大误差 $1 - p_{NS}(0.5) = 0.3125$，PE 改善约 5 倍。
+\end{enumerate}
+
+\end{document}

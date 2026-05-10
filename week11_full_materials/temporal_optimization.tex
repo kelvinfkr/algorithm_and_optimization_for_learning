@@ -1,0 +1,1933 @@
+\documentclass[12pt, a4paper]{ctexart}
+
+%========================================
+% 宏包引入
+%========================================
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{bm}
+\usepackage{listings}
+
+% 设置绘图库
+\usetikzlibrary{arrows.meta, positioning, calc, shapes, decorations.pathreplacing, patterns, automata}
+\pgfplotsset{compat=1.18}
+
+%========================================
+% 代码高亮设置
+%========================================
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!5}
+}
+
+%========================================
+% 自定义颜色与环境
+%========================================
+\definecolor{myblue}{RGB}{0, 102, 204}
+\definecolor{myred}{RGB}{204, 0, 0}
+\definecolor{mygreen}{RGB}{0, 153, 76}
+\definecolor{mypurple}{RGB}{128, 0, 128}
+\definecolor{myorange}{RGB}{255, 140, 0}
+\definecolor{gpugreen}{RGB}{118, 185, 0}
+
+% 板书环境
+\tcbuselibrary{skins, breakable}
+\newtcolorbox{blackboard}[1][]{
+    colback=gray!10,
+    colframe=black!70,
+    fonttitle=\bfseries,
+    title={#1},
+    boxrule=0.5mm,
+    sharp corners,
+    breakable
+}
+
+% 直觉与洞察
+\newtcolorbox{insight}[1][]{
+    colback=yellow!10,
+    colframe=orange!60!black,
+    fonttitle=\bfseries,
+    title={直觉：#1},
+    breakable
+}
+
+% 关键结论
+\newtcolorbox{keypoint}[1][]{
+    colback=myblue!5,
+    colframe=myblue,
+    fonttitle=\bfseries,
+    title={核心结论：#1},
+    breakable
+}
+
+% GPU要点
+\newtcolorbox{gpubox}[1][]{
+    colback=gpugreen!10,
+    colframe=gpugreen!70!black,
+    fonttitle=\bfseries,
+    title={GPU视角：#1},
+    breakable
+}
+
+% 实验环境
+\newtcolorbox{experiment}[1][]{
+    colback=mypurple!5,
+    colframe=mypurple,
+    fonttitle=\bfseries,
+    title={实验：#1},
+    breakable
+}
+
+% 定义与定理
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{definition}[theorem]{定义}
+\newtheorem{proposition}[theorem]{命题}
+\newtheorem{corollary}[theorem]{推论}
+\newtheorem{example}[theorem]{例}
+
+%========================================
+% 页眉页脚
+%========================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{优化算法：从理论到大规模实践}
+\fancyhead[R]{第10周：变分法与最优控制}
+\fancyfoot[C]{\thepage}
+
+%========================================
+% 文档开始
+%========================================
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries 第10周：变分法与最优控制}
+
+\vspace{0.5cm}
+{\large 从优化函数到优化路径——连续时间优化的统一视角}
+\end{center}
+
+\tableofcontents
+\newpage
+
+%========================================
+\section*{本讲导读}
+%========================================
+
+\begin{blackboard}[本周的核心洞察]
+
+\textbf{之前的优化}：
+\begin{itemize}
+    \item 优化\textbf{向量} $x \in \mathbb{R}^n$
+    \item $\min_x f(x)$
+    \item 梯度下降、牛顿法、SGD
+\end{itemize}
+
+\textbf{本周的优化}：
+\begin{itemize}
+    \item 优化\textbf{函数} $y(x)$ 或\textbf{路径} $x(t)$
+    \item $\min_{y(\cdot)} J[y] = \int F(y, y', x) \, dx$
+    \item Euler-Lagrange方程、HJB方程
+\end{itemize}
+
+\textbf{惊人联系}：
+\begin{itemize}
+    \item 最大熵 $\Rightarrow$ 指数族分布
+    \item 变分推断 $\Rightarrow$ ELBO
+    \item HJB方程 $\Rightarrow$ Bellman方程（RL的核心！）
+    \item 伴随方法 $\Rightarrow$ 反向传播
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[内容结构]
+
+\textbf{第一部分}：泛函优化基础（10min）
+
+\textbf{第二部分}：Euler-Lagrange方程（15min）
+
+\textbf{第三部分}：最大熵原理（15min）
+
+\textbf{第四部分}：KL散度与变分推断（15min）
+
+\textbf{第五部分}：信息瓶颈（15min）
+
+\textbf{第六部分}：最优控制与HJB（20min）
+
+\textbf{第七部分}：HJB→Bellman，伴随→反向传播（20min）
+
+\textbf{第八部分}：实验（30min）
+
+\end{blackboard}
+
+%========================================
+\section{泛函优化：从优化点到优化函数}
+%========================================
+
+\begin{blackboard}[什么是泛函？]
+
+\textbf{回顾}：
+\begin{itemize}
+    \item \textbf{函数} $f: \mathbb{R}^n \to \mathbb{R}$，输入向量，输出数
+    \item 例：$f(x_1, x_2) = x_1^2 + x_2^2$
+\end{itemize}
+
+\textbf{新概念}：
+\begin{itemize}
+    \item \textbf{泛函} $J: \mathcal{F} \to \mathbb{R}$，输入函数，输出数
+    \item $\mathcal{F}$ 是某个函数空间（如所有连续函数）
+\end{itemize}
+
+\textbf{例子}：
+\[
+J[y] = \int_a^b F(y(x), y'(x), x) \, dx
+\]
+
+输入一个函数 $y(x)$，输出一个数（积分值）
+
+\end{blackboard}
+
+\begin{blackboard}[泛函的具体例子]
+
+\textbf{例1：曲线长度}
+
+从 $(0, 0)$ 到 $(1, 1)$ 的曲线 $y(x)$，长度是多少？
+
+\[
+L[y] = \int_0^1 \sqrt{1 + (y'(x))^2} \, dx
+\]
+
+这里 $F(y, y', x) = \sqrt{1 + (y')^2}$
+
+\textbf{具体计算}：如果 $y(x) = x$（直线）
+
+$y'(x) = 1$，$L = \int_0^1 \sqrt{1 + 1} \, dx = \sqrt{2} \approx 1.414$
+
+如果 $y(x) = x^2$（抛物线）
+
+$y'(x) = 2x$，$L = \int_0^1 \sqrt{1 + 4x^2} \, dx \approx 1.479$
+
+\textbf{直线更短}！（符合直觉）
+
+\end{blackboard}
+
+\begin{blackboard}[泛函的具体例子（续）]
+
+\textbf{例2：最速降线（Brachistochrone）}
+
+小球从 $(0, 0)$ 滑到 $(1, -1)$，哪条路径最快？
+
+\begin{center}
+\begin{tikzpicture}[scale=2]
+    \draw[->] (0, 0.2) -- (0, -1.3) node[below] {$y$};
+    \draw[->] (-0.2, 0) -- (1.3, 0) node[right] {$x$};
+    \fill (0, 0) circle (1pt) node[above left] {$(0,0)$};
+    \fill (1, -1) circle (1pt) node[below right] {$(1,-1)$};
+    \draw[thick, blue] (0, 0) -- (1, -1) node[midway, above right] {直线};
+    \draw[thick, red, domain=0:1, samples=50] plot (\x, {-\x*\x}) node[right] {抛物线};
+    \draw[thick, green!50!black, domain=0:1, samples=50] plot (\x, {-0.5*(1-cos(180*\x))}) node[right] {摆线};
+\end{tikzpicture}
+\end{center}
+
+时间泛函：$T[y] = \int_0^1 \frac{\sqrt{1 + (y')^2}}{\sqrt{-2gy}} \, dx$
+
+\textbf{答案}：摆线（Cycloid）！不是直线也不是抛物线
+
+\end{blackboard}
+
+\begin{blackboard}[泛函的具体例子（续）]
+
+\textbf{例3：信息熵}
+
+给定概率分布 $p(x)$，熵是多少？
+
+\[
+H[p] = -\int p(x) \log p(x) \, dx
+\]
+
+输入一个概率密度函数 $p(x)$，输出一个数（熵值）
+
+\textbf{例4：KL散度}
+
+两个分布 $p, q$ 的``距离''：
+
+\[
+D_{\text{KL}}[p \| q] = \int p(x) \log \frac{p(x)}{q(x)} \, dx
+\]
+
+\textbf{这些都是泛函！}
+
+\end{blackboard}
+
+\begin{blackboard}[泛函优化的目标]
+
+\textbf{问题}：在所有满足某些条件的函数中，找使泛函取极值的函数
+
+\textbf{普通优化}：
+\[
+\min_{x \in \mathbb{R}^n} f(x) \quad \Rightarrow \quad \nabla f(x^*) = 0
+\]
+
+\textbf{泛函优化}：
+\[
+\min_{y(\cdot) \in \mathcal{F}} J[y] \quad \Rightarrow \quad \text{??}
+\]
+
+\textbf{需要回答}：
+
+``泛函的梯度''是什么？
+
+``泛函的极值条件''是什么？
+
+\textbf{答案}：Euler-Lagrange 方程！
+
+\end{blackboard}
+
+%========================================
+\section{Euler-Lagrange方程：泛函的极值条件}
+%========================================
+
+\begin{blackboard}[变分的概念]
+
+\textbf{普通微分}：$x \to x + \epsilon$
+
+\[
+df = f(x + \epsilon) - f(x) \approx f'(x) \cdot \epsilon
+\]
+
+\textbf{泛函的变分}：$y(x) \to y(x) + \epsilon \eta(x)$
+
+其中 $\eta(x)$ 是``扰动函数''，$\eta(a) = \eta(b) = 0$（边界不动）
+
+\[
+\delta J = J[y + \epsilon\eta] - J[y]
+\]
+
+\textbf{极值条件}：对所有扰动 $\eta$，$\delta J = 0$
+
+\end{blackboard}
+
+\begin{blackboard}[推导Euler-Lagrange方程]
+
+\textbf{设泛函}：$J[y] = \int_a^b F(y, y', x) \, dx$
+
+\textbf{扰动}：$\tilde{y}(x) = y(x) + \epsilon \eta(x)$
+
+\[
+J[y + \epsilon\eta] = \int_a^b F(y + \epsilon\eta, y' + \epsilon\eta', x) \, dx
+\]
+
+\textbf{Taylor展开}：
+\[
+F(y + \epsilon\eta, y' + \epsilon\eta', x) \approx F + \epsilon\eta \frac{\partial F}{\partial y} + \epsilon\eta' \frac{\partial F}{\partial y'}
+\]
+
+\textbf{变分}：
+\[
+\delta J = \epsilon \int_a^b \left( \eta \frac{\partial F}{\partial y} + \eta' \frac{\partial F}{\partial y'} \right) dx
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[推导（续）：分部积分]
+
+\textbf{对第二项分部积分}：
+
+\[
+\int_a^b \eta' \frac{\partial F}{\partial y'} \, dx = \left[ \eta \frac{\partial F}{\partial y'} \right]_a^b - \int_a^b \eta \frac{d}{dx}\left( \frac{\partial F}{\partial y'} \right) dx
+\]
+
+边界项 $= 0$（因为 $\eta(a) = \eta(b) = 0$）
+
+\textbf{代入}：
+\[
+\delta J = \epsilon \int_a^b \eta(x) \left( \frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} \right) dx
+\]
+
+\textbf{极值条件}：对所有 $\eta$，$\delta J = 0$
+
+$\Rightarrow$ 括号内必须为零！
+
+\end{blackboard}
+
+\begin{blackboard}[Euler-Lagrange方程]
+
+\begin{keypoint}[Euler-Lagrange方程]
+\[
+\boxed{\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0}
+\]
+\end{keypoint}
+
+\textbf{这是泛函 $J[y] = \int F(y, y', x) \, dx$ 取极值的必要条件}
+
+\textbf{类比}：
+\begin{center}
+\begin{tabular}{c|c}
+普通优化 & 泛函优化 \\
+\hline
+$\nabla f(x^*) = 0$ & $\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0$ \\
+代数方程组 & 微分方程
+\end{tabular}
+\end{center}
+
+\textbf{泛函优化变成了求解微分方程！}
+
+\end{blackboard}
+
+\begin{blackboard}[另一种推导：离散化 + 拉格朗日乘子]
+
+\textbf{思路}：把连续问题离散化，用普通优化方法，再取极限
+
+\textbf{为什么这样做？}
+\begin{itemize}
+    \item 离散优化更直观（有限维）
+    \item 用熟悉的拉格朗日乘子法
+    \item 取极限得到连续结果
+    \item 数值方法的理论基础
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[离散化设置]
+
+\textbf{把区间 $[a, b]$ 分成 $N$ 份}：
+
+$x_0 = a, \; x_1 = a + h, \; x_2 = a + 2h, \; \ldots, \; x_N = b$
+
+其中 $h = \frac{b - a}{N}$（步长）
+
+\textbf{离散化函数}：$y(x) \to (y_0, y_1, y_2, \ldots, y_N)$
+
+\textbf{离散化导数}：$y'(x_i) \approx \frac{y_{i+1} - y_i}{h}$
+
+\textbf{离散化积分}：$\int_a^b F \, dx \approx \sum_{i=0}^{N-1} F_i \cdot h$
+
+\begin{center}
+\begin{tikzpicture}[scale=1.5]
+    \draw[->] (0, 0) -- (4.5, 0) node[right] {$x$};
+    \draw[->] (0, 0) -- (0, 2.5) node[above] {$y$};
+    
+    % 连续曲线
+    \draw[blue, thick, domain=0:4, samples=50] plot (\x, {0.5 + 0.8*sin(0.8*\x r)});
+    
+    % 离散点
+    \foreach \i in {0, 1, 2, 3, 4} {
+        \fill[red] (\i, {0.5 + 0.8*sin(0.8*\i r)}) circle (2pt);
+    }
+    
+    % 标注
+    \node[below] at (0, 0) {$x_0$};
+    \node[below] at (1, 0) {$x_1$};
+    \node[below] at (2, 0) {$x_2$};
+    \node[below] at (4, 0) {$x_N$};
+    
+    \draw[<->] (0, -0.3) -- (1, -0.3) node[midway, below] {$h$};
+\end{tikzpicture}
+\end{center}
+
+\end{blackboard}
+
+\begin{blackboard}[离散化泛函]
+
+\textbf{连续泛函}：$J[y] = \int_a^b F(y, y', x) \, dx$
+
+\textbf{离散泛函}：
+\[
+J_N(y_0, y_1, \ldots, y_N) = \sum_{i=0}^{N-1} F\left( y_i, \frac{y_{i+1} - y_i}{h}, x_i \right) \cdot h
+\]
+
+\textbf{边界条件}：$y_0 = y(a)$，$y_N = y(b)$ 固定
+
+\textbf{优化变量}：$y_1, y_2, \ldots, y_{N-1}$（内部点）
+
+\textbf{这是一个普通的 $(N-1)$ 维优化问题！}
+
+可以用 $\nabla J_N = 0$ 求极值
+
+\end{blackboard}
+
+\begin{blackboard}[对内部点求导]
+
+\textbf{对 $y_k$（$1 \leq k \leq N-1$）求偏导}：
+
+$y_k$ 出现在两项中：
+\begin{itemize}
+    \item 第 $k-1$ 项：$F\left( y_{k-1}, \frac{y_k - y_{k-1}}{h}, x_{k-1} \right)$
+    \item 第 $k$ 项：$F\left( y_k, \frac{y_{k+1} - y_k}{h}, x_k \right)$
+\end{itemize}
+
+\textbf{记}：$F_i = F\left( y_i, \frac{y_{i+1} - y_i}{h}, x_i \right)$
+
+\textbf{求导}：
+\[
+\frac{\partial J_N}{\partial y_k} = \frac{\partial F_{k-1}}{\partial y_k} \cdot h + \frac{\partial F_k}{\partial y_k} \cdot h
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[展开偏导数]
+
+\textbf{对于 $F_{k-1}$}：$y_k$ 只出现在``导数''位置
+
+\[
+\frac{\partial F_{k-1}}{\partial y_k} = \frac{\partial F}{\partial y'}\bigg|_{k-1} \cdot \frac{\partial}{\partial y_k}\left( \frac{y_k - y_{k-1}}{h} \right) = \frac{\partial F}{\partial y'}\bigg|_{k-1} \cdot \frac{1}{h}
+\]
+
+\textbf{对于 $F_k$}：$y_k$ 出现在两个位置
+
+\[
+\frac{\partial F_k}{\partial y_k} = \frac{\partial F}{\partial y}\bigg|_k + \frac{\partial F}{\partial y'}\bigg|_k \cdot \frac{\partial}{\partial y_k}\left( \frac{y_{k+1} - y_k}{h} \right) = \frac{\partial F}{\partial y}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_k \cdot \frac{1}{h}
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[极值条件]
+
+\textbf{$\frac{\partial J_N}{\partial y_k} = 0$}：
+
+\[
+\frac{\partial F}{\partial y'}\bigg|_{k-1} \cdot \frac{1}{h} \cdot h + \left( \frac{\partial F}{\partial y}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_k \cdot \frac{1}{h} \right) \cdot h = 0
+\]
+
+\textbf{简化}：
+\[
+\frac{\partial F}{\partial y'}\bigg|_{k-1} + \frac{\partial F}{\partial y}\bigg|_k \cdot h - \frac{\partial F}{\partial y'}\bigg|_k = 0
+\]
+
+\textbf{整理}：
+\[
+\frac{\partial F}{\partial y}\bigg|_k = \frac{1}{h}\left( \frac{\partial F}{\partial y'}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_{k-1} \right)
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[取连续极限]
+
+\textbf{右边是差分}：
+\[
+\frac{1}{h}\left( \frac{\partial F}{\partial y'}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_{k-1} \right) = \frac{\frac{\partial F}{\partial y'}(x_k) - \frac{\partial F}{\partial y'}(x_{k-1})}{h}
+\]
+
+\textbf{当 $h \to 0$ 时}，差商变导数：
+\[
+\lim_{h \to 0} \frac{\frac{\partial F}{\partial y'}(x + h) - \frac{\partial F}{\partial y'}(x)}{h} = \frac{d}{dx}\frac{\partial F}{\partial y'}
+\]
+
+\textbf{因此}：
+\[
+\frac{\partial F}{\partial y} = \frac{d}{dx}\frac{\partial F}{\partial y'}
+\]
+
+\begin{keypoint}[离散推导得到E-L方程]
+\[
+\boxed{\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0}
+\]
+和变分法得到的\textbf{完全一样}！
+\end{keypoint}
+
+\end{blackboard}
+
+\begin{blackboard}[数值例子：离散最短路径]
+
+\textbf{问题}：从 $(0, 0)$ 到 $(1, 1)$ 的最短路径
+
+\textbf{离散化}：$N = 4$，$h = 0.25$
+
+点：$(0, y_0), (0.25, y_1), (0.5, y_2), (0.75, y_3), (1, y_4)$
+
+边界：$y_0 = 0$，$y_4 = 1$
+
+\textbf{离散长度}：
+\[
+L_4 = \sum_{i=0}^{3} \sqrt{h^2 + (y_{i+1} - y_i)^2} = \sum_{i=0}^{3} \sqrt{0.0625 + (y_{i+1} - y_i)^2}
+\]
+
+\textbf{对 $y_1$ 求导}：
+\[
+\frac{\partial L_4}{\partial y_1} = \frac{y_1 - y_0}{\sqrt{0.0625 + (y_1 - y_0)^2}} - \frac{y_2 - y_1}{\sqrt{0.0625 + (y_2 - y_1)^2}}
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[数值例子（续）]
+
+\textbf{极值条件}：$\frac{\partial L_4}{\partial y_k} = 0$ 对 $k = 1, 2, 3$
+
+\textbf{令}：$s_i = \frac{y_{i+1} - y_i}{\sqrt{0.0625 + (y_{i+1} - y_i)^2}}$（归一化斜率）
+
+条件变成：$s_0 = s_1 = s_2 = s_3$
+
+\textbf{即}：所有线段斜率相同！
+
+\textbf{解}：$y_1 = 0.25$，$y_2 = 0.5$，$y_3 = 0.75$
+
+（等差数列 $\Rightarrow$ \textbf{直线}！）
+
+\textbf{验证}：$L_4 = 4 \times \sqrt{0.0625 + 0.0625} = 4 \times 0.354 = \mathbf{1.414}$
+
+和 $\sqrt{2}$ 一致！
+
+\end{blackboard}
+
+\begin{blackboard}[两种推导方法的比较]
+
+\begin{center}
+\begin{tabular}{c|c|c}
+& \textbf{变分法} & \textbf{离散化} \\
+\hline
+起点 & 函数空间的扰动 & 有限维优化 \\
+工具 & 分部积分 & 偏导数链式法则 \\
+极限 & 无（直接得到） & $h \to 0$ \\
+直觉 & 数学上更优美 & 更接近数值计算 \\
+应用 & 理论分析 & 数值方法设计
+\end{tabular}
+\end{center}
+
+\textbf{两条路殊途同归}：都得到 E-L 方程！
+
+\textbf{离散方法的额外好处}：
+\begin{itemize}
+    \item 直接给出数值算法（离散E-L方程组）
+    \item 对于复杂问题，可能更容易推导
+    \item 和现代优化方法（如自动微分）的联系更紧密
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[例1：最短路径]
+
+\textbf{问题}：从 $(0, y_0)$ 到 $(1, y_1)$，哪条曲线最短？
+
+\[
+L[y] = \int_0^1 \sqrt{1 + (y')^2} \, dx
+\]
+
+这里 $F = \sqrt{1 + (y')^2}$
+
+\textbf{计算偏导}：
+
+$\frac{\partial F}{\partial y} = 0$（$F$ 不显含 $y$）
+
+$\frac{\partial F}{\partial y'} = \frac{y'}{\sqrt{1 + (y')^2}}$
+
+\textbf{Euler-Lagrange方程}：
+
+\[
+0 - \frac{d}{dx}\left( \frac{y'}{\sqrt{1 + (y')^2}} \right) = 0
+\]
+
+$\Rightarrow \frac{y'}{\sqrt{1 + (y')^2}} = C$（常数）
+
+$\Rightarrow y' = $ 常数 $\Rightarrow y = ax + b$（\textbf{直线}！）
+
+\end{blackboard}
+
+\begin{blackboard}[例1数值验证]
+
+\textbf{边界条件}：$(0, 0) \to (1, 1)$
+
+\textbf{E-L解}：$y = x$（直线）
+
+$L = \int_0^1 \sqrt{1 + 1} \, dx = \sqrt{2} \approx \mathbf{1.414}$
+
+\textbf{尝试其他曲线}：
+
+$y = x^2$：$y' = 2x$
+
+$L = \int_0^1 \sqrt{1 + 4x^2} \, dx = \frac{1}{4}\left[ 2x\sqrt{1+4x^2} + \sinh^{-1}(2x) \right]_0^1 \approx \mathbf{1.479}$
+
+$y = \sin(\frac{\pi x}{2})$：$y' = \frac{\pi}{2}\cos(\frac{\pi x}{2})$
+
+$L = \int_0^1 \sqrt{1 + \frac{\pi^2}{4}\cos^2(\frac{\pi x}{2})} \, dx \approx \mathbf{1.534}$
+
+\textbf{结论}：直线确实最短！
+
+\end{blackboard}
+
+\begin{blackboard}[例2：最速降线]
+
+\textbf{问题}：小球从原点滑到 $(x_1, y_1)$，重力场中，哪条路最快？
+
+速度 $v = \sqrt{2gy}$（能量守恒），时间：
+\[
+T[y] = \int_0^{x_1} \frac{\sqrt{1 + (y')^2}}{\sqrt{2gy}} \, dx
+\]
+
+这里 $F = \frac{\sqrt{1 + (y')^2}}{\sqrt{2gy}}$
+
+\textbf{E-L方程的解}：摆线（Cycloid）参数形式
+\[
+x = r(\theta - \sin\theta), \quad y = r(1 - \cos\theta)
+\]
+
+\textbf{历史}：1696年，Johann Bernoulli提出，Newton、Leibniz、L'Hôpital、Jakob Bernoulli都给出了解答
+
+\end{blackboard}
+
+\begin{blackboard}[例2数值验证]
+
+\textbf{边界}：$(0, 0) \to (1, 1)$，$g = 10$
+
+\textbf{直线} $y = x$：
+\[
+T_{\text{直线}} = \int_0^1 \frac{\sqrt{2}}{\sqrt{20x}} \, dx = \frac{\sqrt{2}}{\sqrt{20}} \cdot 2\sqrt{x}\Big|_0^1 = \frac{2\sqrt{2}}{\sqrt{20}} \approx \mathbf{0.632} \text{ s}
+\]
+
+\textbf{摆线}（数值积分）：
+\[
+T_{\text{摆线}} \approx \mathbf{0.584} \text{ s}
+\]
+
+\textbf{摆线比直线快约 8\%！}
+
+\textbf{直觉}：摆线开始时更陡，小球先获得更大速度
+
+\end{blackboard}
+
+\begin{blackboard}[Beltrami恒等式：特殊情况]
+
+当 $F$ 不显含 $x$ 时（$\frac{\partial F}{\partial x} = 0$），有更简单的形式：
+
+\[
+\boxed{F - y' \frac{\partial F}{\partial y'} = C \quad \text{（常数）}}
+\]
+
+\textbf{证明}（选读）：
+\[
+\frac{d}{dx}\left( F - y' \frac{\partial F}{\partial y'} \right) = \frac{\partial F}{\partial y}y' + \frac{\partial F}{\partial y'}y'' - y''\frac{\partial F}{\partial y'} - y'\frac{d}{dx}\frac{\partial F}{\partial y'}
+\]
+\[
+= y' \left( \frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} \right) = 0
+\]
+
+\textbf{应用}：最速降线、测地线等问题可以用这个简化
+
+\end{blackboard}
+
+\begin{blackboard}[例3：悬链线（Catenary）]
+
+\textbf{问题}：两端固定的柔软链条，在重力下的形状是什么？
+
+\begin{center}
+\begin{tikzpicture}[scale=1.2]
+    \draw[thick] (-2, 1.5) -- (-2, 0);
+    \draw[thick] (2, 1.5) -- (2, 0);
+    \fill (-2, 1.5) circle (2pt);
+    \fill (2, 1.5) circle (2pt);
+    \draw[blue, thick, domain=-2:2, samples=50] plot (\x, {0.5*cosh(\x/0.5) - 0.5});
+    \node at (0, -0.5) {悬链线};
+\end{tikzpicture}
+\end{center}
+
+\textbf{物理}：链条在势能最低的位置平衡
+
+\textbf{泛函}：势能 = $\int \rho g y \, ds = \int \rho g y \sqrt{1 + (y')^2} \, dx$
+
+这里 $F = y \sqrt{1 + (y')^2}$
+
+\end{blackboard}
+
+\begin{blackboard}[悬链线的求解]
+
+\textbf{用Beltrami恒等式}（$F$ 不显含 $x$）：
+
+$F - y' \frac{\partial F}{\partial y'} = C$
+
+\textbf{计算}：
+\[
+\frac{\partial F}{\partial y'} = \frac{y \cdot y'}{\sqrt{1 + (y')^2}}
+\]
+
+\[
+F - y' \frac{\partial F}{\partial y'} = y\sqrt{1 + (y')^2} - \frac{y(y')^2}{\sqrt{1 + (y')^2}} = \frac{y}{\sqrt{1 + (y')^2}} = C
+\]
+
+\textbf{解出}：$y = C \sqrt{1 + (y')^2}$
+
+令 $y' = \sinh(t)$，则 $y = C \cosh(t)$
+
+\textbf{悬链线方程}：$y = a \cosh\left(\frac{x}{a}\right)$
+
+\end{blackboard}
+
+\begin{blackboard}[悬链线数值验证]
+
+\textbf{边界}：$(-1, 1.5) \to (1, 1.5)$
+
+\textbf{悬链线}：$y = a \cosh(x/a)$，其中 $a \cosh(1/a) = 1.5$
+
+数值求解：$a \approx 0.83$
+
+$y(x) = 0.83 \cosh(x/0.83)$
+
+\textbf{势能}（取 $\rho g = 1$）：
+\[
+E_{\text{悬链线}} = \int_{-1}^{1} y \sqrt{1 + (y')^2} \, dx \approx \mathbf{3.52}
+\]
+
+\textbf{对比抛物线}：$y = 0.5x^2 + 1$（同样经过两端点）
+\[
+E_{\text{抛物线}} = \int_{-1}^{1} (0.5x^2 + 1) \sqrt{1 + x^2} \, dx \approx \mathbf{3.58}
+\]
+
+\textbf{悬链线势能更低}！（3.52 < 3.58）
+
+\end{blackboard}
+
+\begin{blackboard}[例4：等周问题（Isoperimetric）]
+
+\textbf{问题}：给定周长 $L$，围成最大面积的曲线是什么？
+
+\textbf{约束}：$\oint ds = L$（周长固定）
+
+\textbf{目标}：$\max A = \frac{1}{2}\oint (x \, dy - y \, dx)$
+
+\textbf{这是带约束的泛函优化！}
+
+\textbf{用拉格朗日乘子}：
+\[
+\mathcal{L} = A - \lambda (周长 - L)
+\]
+
+\textbf{结论}：曲率恒定 $\Rightarrow$ \textbf{圆}！
+
+\textbf{数值验证}：周长 $L = 2\pi$
+
+圆：半径 $r = 1$，面积 $= \pi \approx \mathbf{3.14}$
+
+正方形：边长 $= \pi/2$，面积 $= (\pi/2)^2 \approx \mathbf{2.47}$
+
+正六边形：面积 $\approx \mathbf{2.72}$
+
+\textbf{圆确实最大}！
+
+\end{blackboard}
+
+\begin{blackboard}[多变量推广]
+
+\textbf{多个函数}：$J[y_1, \ldots, y_n] = \int F(y_1, \ldots, y_n, y_1', \ldots, y_n', x) \, dx$
+
+\textbf{E-L方程}（对每个 $y_i$）：
+\[
+\frac{\partial F}{\partial y_i} - \frac{d}{dx}\frac{\partial F}{\partial y_i'} = 0, \quad i = 1, \ldots, n
+\]
+
+\textbf{高阶导数}：$J[y] = \int F(y, y', y'', x) \, dx$
+
+\textbf{E-L方程}：
+\[
+\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} + \frac{d^2}{dx^2}\frac{\partial F}{\partial y''} = 0
+\]
+
+\end{blackboard}
+
+%========================================
+\section{最大熵原理：约束下的分布选择}
+%========================================
+
+\begin{blackboard}[熵的回顾]
+
+\textbf{离散熵}：$H(p) = -\sum_i p_i \log p_i$
+
+\textbf{连续熵（微分熵）}：$H[p] = -\int p(x) \log p(x) \, dx$
+
+\textbf{熵的含义}：
+\begin{itemize}
+    \item 不确定性的度量
+    \item 信息量的期望
+    \item 分布的``扩散程度''
+\end{itemize}
+
+\textbf{熵最大的分布}：最``均匀''、最``无偏''
+
+\end{blackboard}
+
+\begin{blackboard}[最大熵原理]
+
+\textbf{问题}：已知某些约束（如均值、方差），应该选哪个分布？
+
+\textbf{最大熵原理}（Jaynes, 1957）：
+
+选择满足约束的\textbf{熵最大}的分布
+
+\textbf{理由}：
+\begin{itemize}
+    \item 不引入额外假设
+    \item 最``保守''的选择
+    \item 信息论上最优
+\end{itemize}
+
+\textbf{数学形式}：
+\[
+\max_{p} H[p] = -\int p(x) \log p(x) \, dx
+\]
+subject to 约束条件
+
+\end{blackboard}
+
+\begin{blackboard}[例1：无约束最大熵]
+
+\textbf{问题}：在 $[a, b]$ 上，哪个分布熵最大？
+
+\textbf{约束}：$\int_a^b p(x) \, dx = 1$（归一化）
+
+\textbf{Lagrangian}：
+\[
+\mathcal{L}[p] = -\int p \log p \, dx - \lambda \left( \int p \, dx - 1 \right)
+\]
+
+\textbf{变分}：$\frac{\delta \mathcal{L}}{\delta p} = -\log p - 1 - \lambda = 0$
+
+$\Rightarrow p(x) = e^{-1-\lambda} = $ 常数
+
+\textbf{归一化}：$p(x) = \frac{1}{b-a}$（\textbf{均匀分布}！）
+
+\end{blackboard}
+
+\begin{blackboard}[例1数值验证]
+
+\textbf{区间} $[0, 1]$
+
+\textbf{均匀分布}：$p(x) = 1$
+
+$H = -\int_0^1 1 \cdot \log 1 \, dx = 0$（以 $e$ 为底）
+
+\textbf{换成 bits}：$H = \log_2(1) = 0$ bits... 不对！
+
+\textbf{更正}：微分熵可以是负数！对于均匀分布：
+\[
+H = -\int_0^1 1 \cdot \ln 1 \, dx = 0 \text{ nats}
+\]
+
+\textbf{对比三角分布}：$p(x) = 2x$（$x \in [0,1]$）
+\[
+H = -\int_0^1 2x \ln(2x) \, dx = -\int_0^1 2x(\ln 2 + \ln x) \, dx
+\]
+\[
+= -\ln 2 - \int_0^1 2x \ln x \, dx = -\ln 2 - 2 \cdot (-\frac{1}{4}) = -\ln 2 + 0.5 \approx -0.193
+\]
+
+\textbf{均匀分布熵更大}（0 > -0.193）
+
+\end{blackboard}
+
+\begin{blackboard}[例2：给定均值的最大熵]
+
+\textbf{问题}：$x \geq 0$，已知 $\mathbb{E}[x] = \mu$，哪个分布熵最大？
+
+\textbf{约束}：
+\begin{itemize}
+    \item $\int_0^\infty p(x) \, dx = 1$
+    \item $\int_0^\infty x \cdot p(x) \, dx = \mu$
+\end{itemize}
+
+\textbf{Lagrangian}：
+\[
+\mathcal{L} = -\int p \log p \, dx - \lambda_0 \left( \int p \, dx - 1 \right) - \lambda_1 \left( \int xp \, dx - \mu \right)
+\]
+
+\textbf{变分}：$-\log p - 1 - \lambda_0 - \lambda_1 x = 0$
+
+$\Rightarrow p(x) = e^{-1-\lambda_0} \cdot e^{-\lambda_1 x} = C e^{-\lambda_1 x}$
+
+\textbf{这是指数分布！}$p(x) = \frac{1}{\mu} e^{-x/\mu}$
+
+\end{blackboard}
+
+\begin{blackboard}[例2数值验证]
+
+\textbf{给定} $\mu = 2$
+
+\textbf{指数分布}：$p(x) = 0.5 e^{-x/2}$
+
+熵：$H = -\int_0^\infty p \ln p \, dx = 1 + \ln \mu = 1 + \ln 2 \approx \mathbf{1.693}$ nats
+
+\textbf{对比 Gamma 分布}：$p(x) = \frac{x}{\theta^2} e^{-x/\theta}$，均值 $= 2\theta = 2 \Rightarrow \theta = 1$
+
+$p(x) = x e^{-x}$
+
+熵：$H = 2 - \ln(1) - \psi(2) = 2 - 0 - (1 - \gamma) \approx 2 - 0.423 = \mathbf{1.577}$ nats
+
+\textbf{指数分布熵更大}（1.693 > 1.577）
+
+\end{blackboard}
+
+\begin{blackboard}[例3：给定均值和方差的最大熵]
+
+\textbf{问题}：$x \in \mathbb{R}$，已知 $\mathbb{E}[x] = \mu$，$\text{Var}(x) = \sigma^2$
+
+\textbf{约束}：
+\begin{itemize}
+    \item $\int p \, dx = 1$
+    \item $\int x p \, dx = \mu$
+    \item $\int (x - \mu)^2 p \, dx = \sigma^2$
+\end{itemize}
+
+\textbf{变分}：$-\log p - 1 - \lambda_0 - \lambda_1 x - \lambda_2 (x-\mu)^2 = 0$
+
+$\Rightarrow p(x) \propto \exp\left( -\lambda_1 x - \lambda_2 (x-\mu)^2 \right)$
+
+配方得：$p(x) = \frac{1}{\sqrt{2\pi\sigma^2}} \exp\left( -\frac{(x-\mu)^2}{2\sigma^2} \right)$
+
+\textbf{这是高斯分布！}
+
+\end{blackboard}
+
+\begin{blackboard}[最大熵与指数族]
+
+\begin{keypoint}[最大熵分布的一般形式]
+约束 $\mathbb{E}[f_k(x)] = \alpha_k$，$k = 1, \ldots, K$ 下的最大熵分布是：
+\[
+\boxed{p(x) = \frac{1}{Z} \exp\left( -\sum_{k=1}^K \lambda_k f_k(x) \right)}
+\]
+这正是\textbf{指数族分布}的形式！
+\end{keypoint}
+
+\textbf{经典结果}：
+\begin{center}
+\begin{tabular}{c|c|c}
+约束 & 最大熵分布 & 名称 \\
+\hline
+无 & 均匀 & Uniform \\
+$\mathbb{E}[x] = \mu$ ($x \geq 0$) & 指数 & Exponential \\
+$\mathbb{E}[x], \text{Var}(x)$ & 高斯 & Gaussian \\
+$\mathbb{E}[\log x], \mathbb{E}[x]$ & Gamma & Gamma \\
+$p_i \geq 0, \sum p_i = 1$ & 离散均匀 & Categorical
+\end{tabular}
+\end{center}
+
+\end{blackboard}
+
+\begin{blackboard}[为什么高斯分布如此常见？]
+
+\textbf{最大熵解释}：
+
+如果只知道均值和方差，高斯是``最保守''的选择
+
+\textbf{中心极限定理解释}：
+
+大量独立随机变量之和趋向高斯
+
+\textbf{两者的联系}：
+
+CLT说高斯是``最可能''出现的
+
+MaxEnt说高斯是``最少假设''的
+
+\textbf{都指向同一个分布}！
+
+\end{blackboard}
+
+%========================================
+\section{KL散度与变分推断}
+%========================================
+
+\begin{blackboard}[KL散度的定义]
+
+\textbf{KL散度}（Kullback-Leibler Divergence）：
+\[
+D_{\text{KL}}(p \| q) = \int p(x) \log \frac{p(x)}{q(x)} \, dx = \mathbb{E}_{p}\left[ \log \frac{p(x)}{q(x)} \right]
+\]
+
+\textbf{性质}：
+\begin{itemize}
+    \item $D_{\text{KL}}(p \| q) \geq 0$（非负）
+    \item $D_{\text{KL}}(p \| q) = 0$ 当且仅当 $p = q$
+    \item \textbf{不对称}：$D_{\text{KL}}(p \| q) \neq D_{\text{KL}}(q \| p)$
+\end{itemize}
+
+\textbf{直觉}：用 $q$ 编码来自 $p$ 的数据，平均多花多少 bits
+
+\end{blackboard}
+
+\begin{blackboard}[KL散度的数值例子]
+
+\textbf{两个高斯分布}：$p = \mathcal{N}(0, 1)$，$q = \mathcal{N}(\mu, \sigma^2)$
+
+\[
+D_{\text{KL}}(p \| q) = \frac{1}{2}\left( \frac{1}{\sigma^2} + \frac{\mu^2}{\sigma^2} - 1 - \log\frac{1}{\sigma^2} \right)
+\]
+
+\textbf{数值}：$p = \mathcal{N}(0, 1)$，$q = \mathcal{N}(1, 1)$
+
+$D_{\text{KL}}(p \| q) = \frac{1}{2}(1 + 1 - 1 - 0) = \mathbf{0.5}$ nats
+
+\textbf{反过来}：$D_{\text{KL}}(q \| p) = \frac{1}{2}(1 + 1 - 1 - 0) = \mathbf{0.5}$ nats
+
+（这个特例下恰好相等，因为方差相同）
+
+\textbf{不同方差}：$p = \mathcal{N}(0, 1)$，$q = \mathcal{N}(0, 2)$
+
+$D_{\text{KL}}(p \| q) = \frac{1}{2}(0.5 + 0 - 1 - \ln 0.5) = \frac{1}{2}(-0.5 + 0.693) = \mathbf{0.097}$
+
+$D_{\text{KL}}(q \| p) = \frac{1}{2}(2 + 0 - 1 - \ln 2) = \frac{1}{2}(1 - 0.693) = \mathbf{0.153}$
+
+\textbf{不对称}！
+
+\end{blackboard}
+
+\begin{blackboard}[变分推断的动机]
+
+\textbf{贝叶斯推断问题}：
+
+已知观测 $\mathbf{x}$，求后验 $p(\mathbf{z} | \mathbf{x})$
+
+\[
+p(\mathbf{z} | \mathbf{x}) = \frac{p(\mathbf{x} | \mathbf{z}) p(\mathbf{z})}{p(\mathbf{x})} = \frac{p(\mathbf{x} | \mathbf{z}) p(\mathbf{z})}{\int p(\mathbf{x} | \mathbf{z}) p(\mathbf{z}) \, d\mathbf{z}}
+\]
+
+\textbf{问题}：分母的积分通常\textbf{无法计算}！
+
+例：$\mathbf{z}$ 是 1000 维，积分是 1000 重积分
+
+\textbf{解决方案}：
+\begin{itemize}
+    \item MCMC：采样近似，但慢
+    \item \textbf{变分推断}：用简单分布 $q(\mathbf{z})$ 近似 $p(\mathbf{z} | \mathbf{x})$
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[变分推断：核心思想]
+
+\textbf{目标}：找 $q(\mathbf{z})$ 使得 $q(\mathbf{z}) \approx p(\mathbf{z} | \mathbf{x})$
+
+\textbf{度量近似好坏}：KL散度
+\[
+D_{\text{KL}}(q \| p) = \int q(\mathbf{z}) \log \frac{q(\mathbf{z})}{p(\mathbf{z} | \mathbf{x})} \, d\mathbf{z}
+\]
+
+\textbf{展开}：
+\begin{align*}
+D_{\text{KL}}(q \| p) &= \int q \log q \, d\mathbf{z} - \int q \log p(\mathbf{z} | \mathbf{x}) \, d\mathbf{z} \\
+&= \int q \log q \, d\mathbf{z} - \int q \log \frac{p(\mathbf{x}, \mathbf{z})}{p(\mathbf{x})} \, d\mathbf{z} \\
+&= \int q \log q \, d\mathbf{z} - \int q \log p(\mathbf{x}, \mathbf{z}) \, d\mathbf{z} + \log p(\mathbf{x})
+\end{align*}
+
+\end{blackboard}
+
+\begin{blackboard}[ELBO：Evidence Lower Bound]
+
+\textbf{整理上式}：
+\[
+\log p(\mathbf{x}) = D_{\text{KL}}(q \| p) + \underbrace{\int q \log \frac{p(\mathbf{x}, \mathbf{z})}{q(\mathbf{z})} \, d\mathbf{z}}_{\text{ELBO}(\mathbf{q})}
+\]
+
+因为 $D_{\text{KL}} \geq 0$：
+\[
+\log p(\mathbf{x}) \geq \text{ELBO}(q)
+\]
+
+\begin{keypoint}[ELBO]
+\[
+\boxed{\text{ELBO}(q) = \mathbb{E}_q[\log p(\mathbf{x}, \mathbf{z})] - \mathbb{E}_q[\log q(\mathbf{z})]}
+\]
+
+\textbf{最小化 KL $\Leftrightarrow$ 最大化 ELBO}
+\end{keypoint}
+
+\end{blackboard}
+
+\begin{blackboard}[ELBO的两种形式]
+
+\textbf{形式1}：
+\[
+\text{ELBO} = \mathbb{E}_q[\log p(\mathbf{x}, \mathbf{z})] + H[q]
+\]
+
+$= $ 联合对数似然的期望 $+$ $q$ 的熵
+
+\textbf{形式2}：
+\[
+\text{ELBO} = \mathbb{E}_q[\log p(\mathbf{x} | \mathbf{z})] - D_{\text{KL}}(q(\mathbf{z}) \| p(\mathbf{z}))
+\]
+
+$= $ 重构项 $-$ 正则项
+
+\textbf{这正是 VAE 的损失函数！}
+
+\end{blackboard}
+
+\begin{blackboard}[VAE损失函数的来源]
+
+\textbf{变分自编码器（VAE）}：
+
+编码器：$q_\phi(\mathbf{z} | \mathbf{x})$（用神经网络参数化）
+
+解码器：$p_\theta(\mathbf{x} | \mathbf{z})$
+
+\textbf{损失函数}：
+\[
+\mathcal{L}(\theta, \phi) = -\text{ELBO} = -\mathbb{E}_{q_\phi}[\log p_\theta(\mathbf{x} | \mathbf{z})] + D_{\text{KL}}(q_\phi(\mathbf{z} | \mathbf{x}) \| p(\mathbf{z}))
+\]
+
+\textbf{第一项}：重构损失（让解码器能还原输入）
+
+\textbf{第二项}：KL正则（让编码分布接近先验）
+
+\textbf{变分推断给出了 VAE 的理论基础！}
+
+\end{blackboard}
+
+\begin{blackboard}[数值例子：高斯VAE]
+
+\textbf{设置}：
+
+先验 $p(\mathbf{z}) = \mathcal{N}(0, I)$
+
+编码器输出 $q_\phi(\mathbf{z} | \mathbf{x}) = \mathcal{N}(\mu_\phi(\mathbf{x}), \text{diag}(\sigma^2_\phi(\mathbf{x})))$
+
+\textbf{KL项}（解析形式）：对于 $d$ 维高斯
+
+\[
+D_{\text{KL}}(q \| p) = \frac{1}{2} \sum_{j=1}^d \left( \mu_j^2 + \sigma_j^2 - 1 - \log \sigma_j^2 \right)
+\]
+
+\textbf{数值}：$d = 2$，$\mu = (1, 0.5)$，$\sigma^2 = (0.5, 0.8)$
+
+$D_{\text{KL}} = \frac{1}{2}[(1 + 0.5 - 1 - \ln 0.5) + (0.25 + 0.8 - 1 - \ln 0.8)]$
+
+$= \frac{1}{2}[(0.5 + 0.693) + (0.05 + 0.223)] = \frac{1}{2}[1.193 + 0.273] = \mathbf{0.733}$
+
+\end{blackboard}
+
+%========================================
+\section{信息瓶颈}
+%========================================
+
+\begin{blackboard}[信息瓶颈的动机]
+
+\textbf{问题}：给定输入 $X$ 和目标 $Y$，如何找最好的表示 $Z$？
+
+\textbf{好的表示应该}：
+\begin{itemize}
+    \item 保留关于 $Y$ 的信息（预测能力）
+    \item 压缩 $X$ 的冗余信息（简洁性）
+\end{itemize}
+
+\textbf{信息论度量}：
+\begin{itemize}
+    \item $I(Z; Y)$：$Z$ 关于 $Y$ 的信息（越大越好）
+    \item $I(X; Z)$：$Z$ 关于 $X$ 的信息（越小越好，压缩）
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[信息瓶颈目标]
+
+\textbf{Tishby et al., 1999}：
+
+\[
+\boxed{\min_{p(z|x)} I(X; Z) - \beta I(Z; Y)}
+\]
+
+\textbf{$\beta > 0$ 控制权衡}：
+\begin{itemize}
+    \item $\beta$ 大：更看重预测能力
+    \item $\beta$ 小：更看重压缩
+\end{itemize}
+
+\textbf{等价形式}：
+\[
+\max_{p(z|x)} I(Z; Y) \quad \text{s.t.} \quad I(X; Z) \leq R
+\]
+
+在压缩预算 $R$ 下最大化预测信息
+
+\end{blackboard}
+
+\begin{blackboard}[信息瓶颈与深度学习]
+
+\textbf{深度网络}：$X \to h_1 \to h_2 \to \cdots \to h_L \to Y$
+
+每一层 $h_l$ 可以看作 $X$ 的表示
+
+\textbf{Shwartz-Ziv \& Tishby, 2017}：
+
+训练过程中：
+\begin{itemize}
+    \item 初期：$I(X; h_l)$ 增加（学习特征）
+    \item 后期：$I(X; h_l)$ 减少，$I(h_l; Y)$ 保持（压缩无关信息）
+\end{itemize}
+
+\textbf{这叫``信息平面''分析}
+
+（虽然后来有争议，但思想很有影响力）
+
+\end{blackboard}
+
+\begin{blackboard}[信息瓶颈的数值例子]
+
+\textbf{简单设置}：
+
+$X \in \{0, 1, 2, 3\}$（4个值），$Y \in \{0, 1\}$（2个值）
+
+\[
+p(x, y) = \begin{cases}
+0.2 & (x, y) \in \{(0,0), (1,0), (2,1), (3,1)\} \\
+0.1 & (x, y) \in \{(0,1), (1,1), (2,0), (3,0)\}
+\end{cases}
+\]
+
+\textbf{完美表示}：$Z = X$
+
+$I(X; Z) = H(X) \approx 2$ bits（完全保留）
+
+$I(Z; Y) = I(X; Y) \approx 0.28$ bits
+
+\textbf{压缩表示}：$Z = \mathbf{1}[X \geq 2]$
+
+$I(X; Z) = H(Z) = 1$ bit（压缩一半）
+
+$I(Z; Y) = I(X; Y)$（如果 $Z$ 与 $Y$ 关系不变）
+
+\end{blackboard}
+
+\begin{blackboard}[变分信息瓶颈（VIB）]
+
+\textbf{问题}：$I(X; Z)$ 难以计算
+
+\textbf{VIB}（Alemi et al., 2017）：用变分方法近似
+
+\[
+\mathcal{L}_{\text{VIB}} = \mathbb{E}_{p(x,y)}\left[ \mathbb{E}_{q_\phi(z|x)}[-\log p_\theta(y|z)] + \beta D_{\text{KL}}(q_\phi(z|x) \| r(z)) \right]
+\]
+
+\textbf{比较 VAE}：
+\begin{itemize}
+    \item VAE：重构 $x$，正则化到先验
+    \item VIB：预测 $y$，正则化到先验
+\end{itemize}
+
+\textbf{VIB 用于分类}：更鲁棒、更好的泛化
+
+\end{blackboard}
+
+%========================================
+\section{最优控制与HJB方程}
+%========================================
+
+\begin{blackboard}[最优控制问题]
+
+\textbf{问题设置}：
+
+状态：$\mathbf{x}(t) \in \mathbb{R}^n$
+
+控制：$\mathbf{u}(t) \in \mathbb{R}^m$
+
+动力学：$\dot{\mathbf{x}} = f(\mathbf{x}, \mathbf{u}, t)$
+
+\textbf{目标}：最小化代价
+\[
+J = \phi(\mathbf{x}(T)) + \int_0^T L(\mathbf{x}, \mathbf{u}, t) \, dt
+\]
+
+$\phi$：终端代价，$L$：运行代价
+
+\textbf{找最优控制} $\mathbf{u}^*(t)$ 使 $J$ 最小
+
+\end{blackboard}
+
+\begin{blackboard}[具体例子：LQR问题]
+
+\textbf{线性动力学}：$\dot{\mathbf{x}} = A\mathbf{x} + B\mathbf{u}$
+
+\textbf{二次代价}：
+\[
+J = \frac{1}{2}\mathbf{x}(T)^T Q_f \mathbf{x}(T) + \frac{1}{2}\int_0^T (\mathbf{x}^T Q \mathbf{x} + \mathbf{u}^T R \mathbf{u}) \, dt
+\]
+
+\textbf{数值例子}：一维情况
+
+$\dot{x} = x + u$（不稳定系统）
+
+$J = \frac{1}{2}x(T)^2 + \frac{1}{2}\int_0^T (x^2 + u^2) \, dt$
+
+\textbf{目标}：控制 $x$ 到 0，同时不用太大的 $u$
+
+\end{blackboard}
+
+\begin{blackboard}[Bellman的最优性原理]
+
+\textbf{关键洞察}（Bellman, 1957）：
+
+``最优策略的子策略也是最优的''
+
+\textbf{数学表述}：定义值函数
+
+\[
+V(\mathbf{x}, t) = \min_{\mathbf{u}(\cdot)} \left[ \phi(\mathbf{x}(T)) + \int_t^T L(\mathbf{x}, \mathbf{u}, s) \, ds \right]
+\]
+
+从状态 $(\mathbf{x}, t)$ 出发的最小代价
+
+\textbf{最优性原理}：
+\[
+V(\mathbf{x}, t) = \min_{\mathbf{u}} \left[ L(\mathbf{x}, \mathbf{u}, t) \, dt + V(\mathbf{x} + f(\mathbf{x}, \mathbf{u}, t) \, dt, t + dt) \right]
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[HJB方程的推导]
+
+\textbf{Taylor展开}：
+\[
+V(\mathbf{x} + f \, dt, t + dt) \approx V + \frac{\partial V}{\partial t} dt + \nabla_x V \cdot f \, dt
+\]
+
+\textbf{代入最优性原理}：
+\[
+V = \min_{\mathbf{u}} \left[ L \, dt + V + \frac{\partial V}{\partial t} dt + \nabla_x V \cdot f \, dt \right]
+\]
+
+\textbf{消去 $V$，除以 $dt$}：
+\[
+0 = \min_{\mathbf{u}} \left[ L + \frac{\partial V}{\partial t} + \nabla_x V \cdot f \right]
+\]
+
+\end{blackboard}
+
+\begin{blackboard}[Hamilton-Jacobi-Bellman方程]
+
+\begin{keypoint}[HJB方程]
+\[
+\boxed{-\frac{\partial V}{\partial t} = \min_{\mathbf{u}} \left[ L(\mathbf{x}, \mathbf{u}, t) + \nabla_x V \cdot f(\mathbf{x}, \mathbf{u}, t) \right]}
+\]
+边界条件：$V(\mathbf{x}, T) = \phi(\mathbf{x})$
+\end{keypoint}
+
+\textbf{这是一个偏微分方程（PDE）}
+
+\textbf{从终端 $t = T$ 向初始 $t = 0$ 求解}（\textbf{反向}！）
+
+\textbf{难点}：维度灾难——$V$ 定义在状态空间上，高维时难以求解
+
+\end{blackboard}
+
+\begin{blackboard}[LQR的HJB解]
+
+\textbf{猜测}：$V(\mathbf{x}, t) = \frac{1}{2}\mathbf{x}^T P(t) \mathbf{x}$
+
+\textbf{代入HJB}：
+
+$\nabla_x V = P\mathbf{x}$
+
+$\frac{\partial V}{\partial t} = \frac{1}{2}\mathbf{x}^T \dot{P} \mathbf{x}$
+
+\textbf{最小化对 $\mathbf{u}$}：
+
+$\mathbf{u}^* = -R^{-1} B^T P \mathbf{x}$（线性反馈！）
+
+\textbf{代入得 Riccati 方程}：
+\[
+-\dot{P} = Q + A^T P + PA - PBR^{-1}B^T P
+\]
+
+边界条件：$P(T) = Q_f$
+
+\end{blackboard}
+
+\begin{blackboard}[LQR数值例子]
+
+\textbf{一维}：$\dot{x} = x + u$，$Q = R = Q_f = 1$
+
+\textbf{Riccati方程}：$-\dot{P} = 1 + 2P - P^2$
+
+\textbf{稳态}（$\dot{P} = 0$）：$P^2 - 2P - 1 = 0$
+
+$P = 1 + \sqrt{2} \approx 2.414$
+
+\textbf{最优控制}：$u^* = -Px = -2.414x$
+
+\textbf{闭环动力学}：$\dot{x} = x - 2.414x = -1.414x$
+
+\textbf{稳定！}（极点在 $-1.414$）
+
+\textbf{不加控制}：$\dot{x} = x$，指数增长，不稳定
+
+\end{blackboard}
+
+%========================================
+\section{HJB $\to$ Bellman，伴随 $\to$ 反向传播}
+%========================================
+
+\begin{blackboard}[离散时间：Bellman方程]
+
+\textbf{离散化HJB}：
+
+时间 $t_k = k \cdot \Delta t$，$k = 0, 1, \ldots, N$
+
+\textbf{值函数}：$V_k(\mathbf{x}) = $ 从 $(\mathbf{x}, t_k)$ 出发的最优代价
+
+\textbf{Bellman方程}：
+\[
+\boxed{V_k(\mathbf{x}) = \min_{\mathbf{u}} \left[ L(\mathbf{x}, \mathbf{u}) \Delta t + V_{k+1}(f(\mathbf{x}, \mathbf{u})) \right]}
+\]
+
+边界：$V_N(\mathbf{x}) = \phi(\mathbf{x})$
+
+\textbf{这正是强化学习中的 Bellman 方程！}
+
+\end{blackboard}
+
+\begin{blackboard}[RL中的Bellman方程]
+
+\textbf{RL术语}：
+
+状态 $s$，动作 $a$，奖励 $r$，转移 $P(s'|s,a)$
+
+\textbf{值函数}：$V(s) = \mathbb{E}\left[ \sum_{t=0}^\infty \gamma^t r_t \mid s_0 = s \right]$
+
+\textbf{Bellman方程}：
+\[
+V(s) = \max_a \left[ r(s, a) + \gamma \sum_{s'} P(s'|s,a) V(s') \right]
+\]
+
+\textbf{对比最优控制}：
+
+\begin{center}
+\begin{tabular}{c|c}
+最优控制 & 强化学习 \\
+\hline
+状态 $\mathbf{x}$ & 状态 $s$ \\
+控制 $\mathbf{u}$ & 动作 $a$ \\
+代价 $L$ & 负奖励 $-r$ \\
+动力学 $f$ & 转移 $P$ \\
+min 代价 & max 奖励
+\end{tabular}
+\end{center}
+
+\end{blackboard}
+
+\begin{blackboard}[核心联系：HJB = 连续Bellman]
+
+\textbf{HJB方程}（连续时间）：
+\[
+-\frac{\partial V}{\partial t} = \min_{\mathbf{u}} \left[ L + \nabla V \cdot f \right]
+\]
+
+\textbf{Bellman方程}（离散时间）：
+\[
+V_k = \min_{\mathbf{u}} \left[ L \Delta t + V_{k+1}(f) \right]
+\]
+
+\textbf{关系}：
+
+$\Delta t \to 0$ 时，Bellman $\to$ HJB
+
+HJB 是 Bellman 的\textbf{连续时间极限}！
+
+\textbf{这为 RL 提供了理论基础}
+
+\end{blackboard}
+
+\begin{blackboard}[伴随方法（Adjoint Method）]
+
+\textbf{问题}：计算 $\frac{dJ}{d\theta}$，其中
+
+\[
+J = \phi(\mathbf{x}(T)), \quad \dot{\mathbf{x}} = f(\mathbf{x}, \theta, t)
+\]
+
+$\theta$ 是参数（如神经网络权重）
+
+\textbf{直接方法}：
+
+对每个 $\theta_i$，扰动并重新积分 $\mathbf{x}(t)$
+
+复杂度：$O(p \cdot T)$，$p$ 是参数数量
+
+\textbf{伴随方法}：
+
+引入伴随状态 $\mathbf{a}(t) = \frac{\partial J}{\partial \mathbf{x}(t)}$
+
+复杂度：$O(T)$，与参数数量无关！
+
+\end{blackboard}
+
+\begin{blackboard}[伴随方程]
+
+\textbf{伴随状态}：$\mathbf{a}(t) = \frac{\partial J}{\partial \mathbf{x}(t)}$
+
+\textbf{伴随方程}（反向ODE）：
+\[
+\boxed{\frac{d\mathbf{a}}{dt} = -\mathbf{a}^T \frac{\partial f}{\partial \mathbf{x}}}
+\]
+
+终端条件：$\mathbf{a}(T) = \frac{\partial \phi}{\partial \mathbf{x}(T)}$
+
+\textbf{参数梯度}：
+\[
+\frac{dJ}{d\theta} = \int_0^T \mathbf{a}(t)^T \frac{\partial f}{\partial \theta} \, dt
+\]
+
+\textbf{计算流程}：
+\begin{enumerate}
+    \item 前向：积分 $\dot{\mathbf{x}} = f$ 从 $0$ 到 $T$
+    \item 反向：积分伴随方程从 $T$ 到 $0$
+    \item 累积梯度
+\end{enumerate}
+
+\end{blackboard}
+
+\begin{blackboard}[伴随方法 = 反向传播]
+
+\textbf{神经网络}：$\mathbf{h}_{l+1} = f_l(\mathbf{h}_l, \theta_l)$
+
+\textbf{损失}：$J = \mathcal{L}(\mathbf{h}_L)$
+
+\textbf{反向传播}：
+\[
+\frac{\partial J}{\partial \mathbf{h}_l} = \frac{\partial J}{\partial \mathbf{h}_{l+1}} \cdot \frac{\partial \mathbf{h}_{l+1}}{\partial \mathbf{h}_l}
+\]
+
+\textbf{对比伴随方程}：
+\[
+\frac{d\mathbf{a}}{dt} = -\mathbf{a}^T \frac{\partial f}{\partial \mathbf{x}}
+\]
+
+\textbf{离散化}：
+\[
+\mathbf{a}_l = \mathbf{a}_{l+1}^T \frac{\partial f_l}{\partial \mathbf{h}_l}
+\]
+
+\textbf{完全一样}！反向传播是伴随方法的\textbf{离散形式}
+
+\end{blackboard}
+
+\begin{blackboard}[Neural ODE]
+
+\textbf{Chen et al., 2018}：把神经网络看作ODE
+
+\textbf{传统ResNet}：$\mathbf{h}_{l+1} = \mathbf{h}_l + f_l(\mathbf{h}_l)$
+
+\textbf{连续极限}：$\frac{d\mathbf{h}}{dt} = f(\mathbf{h}, t, \theta)$
+
+\textbf{优势}：
+\begin{itemize}
+    \item 内存 $O(1)$（用伴随方法，不存中间状态）
+    \item 连续深度（可以选任意精度）
+    \item 可逆（用于生成模型）
+\end{itemize}
+
+\textbf{代价}：
+\begin{itemize}
+    \item 训练慢（需要积分ODE）
+    \item 数值稳定性问题
+\end{itemize}
+
+\end{blackboard}
+
+\begin{blackboard}[统一视角]
+
+\begin{center}
+\begin{tikzpicture}[
+    node distance=2.5cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=2.5cm, minimum height=1cm, align=center}
+]
+    \node[box] (var) {变分法\\E-L方程};
+    \node[box, right of=var, xshift=2cm] (oc) {最优控制\\HJB方程};
+    \node[box, below of=var] (maxent) {最大熵\\指数族};
+    \node[box, below of=oc] (rl) {强化学习\\Bellman方程};
+    \node[box, below of=maxent, xshift=2.5cm] (dl) {深度学习\\反向传播};
+    
+    \draw[->] (var) -- (oc) node[midway, above] {加控制};
+    \draw[->] (oc) -- (rl) node[midway, right] {离散化};
+    \draw[->] (var) -- (maxent) node[midway, left] {约束优化};
+    \draw[->] (oc) -- (dl) node[midway, right] {伴随方法};
+    \draw[->] (maxent) -- (dl) node[midway, below left] {变分推断};
+\end{tikzpicture}
+\end{center}
+
+\textbf{一切都是优化！}
+
+\end{blackboard}
+
+%========================================
+\section{实验}
+%========================================
+
+\begin{experiment}[实验10a：Neural ODE基础（12分钟）]
+
+\textbf{目标}：用torchdiffeq实现Neural ODE
+
+\textbf{任务1}：拟合螺旋线数据
+
+\begin{lstlisting}
+import torch
+from torchdiffeq import odeint
+
+# 定义ODE函数
+class ODEFunc(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(2, 50),
+            torch.nn.Tanh(),
+            torch.nn.Linear(50, 2)
+        )
+    
+    def forward(self, t, y):
+        return self.net(y)
+
+# 生成螺旋线数据
+def generate_spiral(n_points=100):
+    t = torch.linspace(0, 4*torch.pi, n_points)
+    x = t * torch.cos(t)
+    y = t * torch.sin(t)
+    return torch.stack([x, y], dim=1)
+
+# 训练
+func = ODEFunc()
+optimizer = torch.optim.Adam(func.parameters(), lr=0.01)
+true_y = generate_spiral()
+y0 = true_y[0:1]
+t = torch.linspace(0, 1, 100)
+
+for epoch in range(1000):
+    pred_y = odeint(func, y0, t)
+    loss = ((pred_y.squeeze() - true_y)**2).mean()
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+\end{lstlisting}
+
+\end{experiment}
+
+\begin{experiment}[实验10a续：分析结果]
+
+\textbf{任务2}：比较不同求解器
+
+\begin{lstlisting}
+# 不同求解器
+methods = ['euler', 'midpoint', 'rk4', 'dopri5']
+
+for method in methods:
+    pred = odeint(func, y0, t, method=method)
+    # 计算误差和时间
+\end{lstlisting}
+
+\textbf{预期结果}：
+
+\begin{center}
+\begin{tabular}{c|c|c}
+求解器 & 相对误差 & 时间 \\
+\hline
+euler & $10^{-2}$ & 1x \\
+midpoint & $10^{-3}$ & 2x \\
+rk4 & $10^{-5}$ & 4x \\
+dopri5 & $10^{-7}$ & 可变
+\end{tabular}
+\end{center}
+
+\textbf{思考}：精度 vs 速度的权衡
+
+\end{experiment}
+
+\begin{experiment}[实验10b：Adjoint方法对比（12分钟）]
+
+\textbf{目标}：比较直接反传 vs Adjoint方法的显存
+
+\textbf{任务}：随深度增加，观察显存变化
+
+\begin{lstlisting}
+from torchdiffeq import odeint, odeint_adjoint
+
+# 不同深度（积分步数）
+depths = [10, 50, 100, 500, 1000]
+
+for depth in depths:
+    t = torch.linspace(0, 1, depth)
+    
+    # 直接方法
+    torch.cuda.reset_peak_memory_stats()
+    pred = odeint(func, y0, t)
+    loss = pred[-1].sum()
+    loss.backward()
+    mem_direct = torch.cuda.max_memory_allocated()
+    
+    # Adjoint方法
+    torch.cuda.reset_peak_memory_stats()
+    pred = odeint_adjoint(func, y0, t)
+    loss = pred[-1].sum()
+    loss.backward()
+    mem_adjoint = torch.cuda.max_memory_allocated()
+    
+    print(f"Depth {depth}: Direct={mem_direct/1e6:.1f}MB, Adjoint={mem_adjoint/1e6:.1f}MB")
+\end{lstlisting}
+
+\end{experiment}
+
+\begin{experiment}[实验10b续：显存分析]
+
+\textbf{预期结果}：
+
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+    xlabel={积分步数},
+    ylabel={显存 (MB)},
+    legend pos=north west,
+    width=10cm,
+    height=6cm
+]
+\addplot[blue, mark=*] coordinates {
+    (10, 5) (50, 25) (100, 50) (500, 250) (1000, 500)
+};
+\addlegendentry{直接方法 $O(L)$}
+
+\addplot[red, mark=square*] coordinates {
+    (10, 5) (50, 5) (100, 5) (500, 5) (1000, 5)
+};
+\addlegendentry{Adjoint $O(1)$}
+\end{axis}
+\end{tikzpicture}
+\end{center}
+
+\textbf{关键观察}：
+
+直接方法：显存 $\propto$ 深度（需要存所有中间状态）
+
+Adjoint：显存恒定（只需当前状态）
+
+\textbf{代价}：Adjoint需要重新计算前向，时间约2倍
+
+\end{experiment}
+
+\begin{experiment}[实验10c：连续Normalizing Flow（6分钟）]
+
+\textbf{目标}：用Neural ODE做密度估计
+
+\textbf{核心公式}：对于ODE $\frac{d\mathbf{z}}{dt} = f(\mathbf{z}, t)$
+
+\[
+\frac{d \log p(\mathbf{z})}{dt} = -\text{tr}\left( \frac{\partial f}{\partial \mathbf{z}} \right)
+\]
+
+\textbf{任务}：拟合二维分布
+
+\begin{lstlisting}
+class CNF(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.net = torch.nn.Sequential(...)
+    
+    def forward(self, t, states):
+        z, log_p = states[0], states[1]
+        dz_dt = self.net(torch.cat([z, t.expand(z.shape[0], 1)], dim=1))
+        
+        # 计算迹（用Hutchinson估计）
+        e = torch.randn_like(z)
+        e_dz = torch.autograd.grad(dz_dt, z, e, create_graph=True)[0]
+        trace = (e_dz * e).sum(dim=1)
+        
+        return dz_dt, -trace
+
+# 从简单分布（高斯）变换到复杂分布
+z0 = torch.randn(1000, 2)
+log_p0 = -0.5 * (z0**2).sum(dim=1)
+z1, log_p1 = odeint(cnf, (z0, log_p0), torch.tensor([0., 1.]))
+\end{lstlisting}
+
+\end{experiment}
+
+%========================================
+\section{本周总结}
+%========================================
+
+\begin{keypoint}[核心公式]
+
+\textbf{1. Euler-Lagrange方程}：
+\[
+\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0
+\]
+
+\textbf{2. 最大熵分布}：
+\[
+p(x) \propto \exp\left( -\sum_k \lambda_k f_k(x) \right)
+\]
+
+\textbf{3. ELBO}：
+\[
+\text{ELBO} = \mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})] - D_{\text{KL}}(q \| p)
+\]
+
+\textbf{4. HJB方程}：
+\[
+-\frac{\partial V}{\partial t} = \min_{\mathbf{u}} \left[ L + \nabla V \cdot f \right]
+\]
+
+\textbf{5. 伴随方程}：
+\[
+\frac{d\mathbf{a}}{dt} = -\mathbf{a}^T \frac{\partial f}{\partial \mathbf{x}}
+\]
+
+\end{keypoint}
+
+\begin{keypoint}[核心联系]
+
+\begin{center}
+\begin{tabular}{c|c}
+概念 & 联系 \\
+\hline
+E-L方程 & 泛函优化的必要条件 \\
+最大熵 & $\to$ 指数族分布 \\
+变分推断 & min KL $\Leftrightarrow$ max ELBO \\
+HJB方程 & $\to$ Bellman方程（RL） \\
+伴随方法 & = 反向传播
+\end{tabular}
+\end{center}
+
+\textbf{统一视角}：优化 + 动力系统 + 概率
+
+\end{keypoint}
+
+%========================================
+\section{思考题}
+%========================================
+
+\begin{blackboard}[课后思考]
+
+\textbf{概念题}：
+
+1. 为什么高斯分布在给定均值和方差下熵最大？直觉解释？
+
+2. KL散度为什么不对称？$D_{\text{KL}}(p\|q)$ 和 $D_{\text{KL}}(q\|p)$ 分别在什么场景下使用？
+
+3. 伴随方法为什么能节省显存？代价是什么？
+
+\textbf{计算题}：
+
+4. 求解最短路径问题：从 $(0, 0)$ 到 $(1, 2)$ 的最短曲线
+
+5. 给定 $\mathbb{E}[x] = 1$，$\mathbb{E}[x^2] = 2$，求最大熵分布
+
+6. 对于LQR：$\dot{x} = 2x + u$，$J = \int_0^\infty (x^2 + u^2) dt$，求最优控制
+
+\textbf{编程题}：
+
+7. 实现一个简单的Neural ODE分类器，与普通ResNet比较
+
+8. 用变分信息瓶颈训练分类器，比较鲁棒性
+
+\end{blackboard}
+
+\end{document}

@@ -1,0 +1,309 @@
+\documentclass[12pt, a4paper]{ctexart}
+
+%========================================
+% 宏包引入
+%========================================
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{bm}
+
+%========================================
+% 颜色与环境
+%========================================
+\definecolor{myblue}{RGB}{0, 102, 204}
+\definecolor{myred}{RGB}{204, 0, 0}
+\definecolor{myorange}{RGB}{255, 140, 0}
+\definecolor{mygreen}{RGB}{0, 153, 76}
+\definecolor{mypurple}{RGB}{128, 0, 128}
+
+\tcbuselibrary{skins, breakable}
+
+% 习题环境
+\newtcolorbox{problem}[1][]{
+    colback=myorange!5,
+    colframe=myorange!75!black,
+    fonttitle=\bfseries,
+    title={#1},
+    boxrule=0.5mm,
+    sharp corners,
+    breakable
+}
+
+% 提示/约定环境
+\newtcolorbox{convention}[1][约定与提示]{
+    colback=myblue!5,
+    colframe=myblue,
+    fonttitle=\bfseries,
+    title={#1},
+    breakable
+}
+
+%========================================
+% 页眉页脚
+%========================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{优化算法：习题集}
+\fancyhead[R]{第 10--11 周}
+\fancyfoot[C]{\thepage}
+
+%========================================
+% 文档开始
+%========================================
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries 习题集：第 10--11 周}
+
+\vspace{0.5em}
+{\large 变分法与最优控制 \;|\; 在线优化与 Regret 框架}
+\end{center}
+
+\vspace{1em}
+
+\begin{convention}
+本习题集共 10 题，平均覆盖第 10 周（变分法、最大熵、KL 散度、HJB/LQR）与第 11 周（MWU、Hoeffding、UCB、Thompson Sampling、KG）。所有题目均要求得出\textbf{具体数值答案}，请保留至少 3 位有效数字。
+
+\medskip
+\textbf{可能用到的标准正态值}：
+\begin{align*}
+&\Phi(0.167) \approx 0.566, \;\; \Phi(0.351) \approx 0.637, \;\; \Phi(0.5) \approx 0.691, \;\; \Phi(0.83) \approx 0.797, \\
+&\Phi(1.0) \approx 0.841, \;\; \Phi(1.5) \approx 0.933, \;\; \Phi(2.0) \approx 0.977, \;\; \Phi(2.34) \approx 0.990. \\
+&\phi(0) = 0.399, \;\; \phi(0.351) \approx 0.375, \;\; \phi(0.5) \approx 0.352, \\
+&\phi(1.0) \approx 0.242, \;\; \phi(1.5) \approx 0.130, \;\; \phi(2.0) \approx 0.054.
+\end{align*}
+其中 $\Phi$ 为标准正态 CDF，$\phi$ 为 PDF。
+
+\medskip
+\textbf{微积分常数}：$\sinh 1 \approx 1.175$，$\cosh 1 \approx 1.543$，$\coth 1 \approx 1.313$，$\ln 2 \approx 0.693$，$\ln 3 \approx 1.099$，$\ln 14 \approx 2.639$。
+\end{convention}
+
+\bigskip
+
+%========================================
+\section*{第一部分：变分法与最优控制}
+%========================================
+
+\begin{problem}[第 1 题：Euler--Lagrange 方程基础]
+求泛函
+\[
+J[y] = \int_0^1 \Big( (y')^2 + y^2 \Big) \, dx
+\]
+在边界条件 $y(0) = 0$，$y(1) = 1$ 下的极值函数 $y^*(x)$ 与最小值 $J^*$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出 $F$ 对应的 Euler--Lagrange 方程，化简为关于 $y$ 的二阶常微分方程。
+    \item 求通解，代入边界条件确定常数，给出 $y^*(x)$ 的解析表达式。
+    \item 计算最小值 $J^*$（保留 3 位小数）。
+    \item 用任意一个不满足 E-L 方程的简单试探函数（如 $y = x$）计算 $J$ 值，验证它确实大于 $J^*$。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 2 题：约束下的最大熵分布]
+设 $x \in [0, \infty)$，已知 $\mathbb{E}[x] = 3$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 用拉格朗日乘子法（对归一化与均值约束）写出最大熵问题的变分方程。
+    \item 解出最大熵分布 $p^*(x)$ 的解析形式（含待定参数）。
+    \item 代入约束确定参数，给出 $p^*(x)$ 的具体表达式，并指出它属于哪一族经典分布。
+    \item 计算 $p^*$ 的微分熵 $H[p^*]$（以 nats 为单位，保留 3 位小数）。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 3 题：高斯分布之间的 KL 散度]
+设 $p = \mathcal{N}(0, 1)$，$q = \mathcal{N}(1, 4)$（即均值 $\mu_q = 1$、方差 $\sigma_q^2 = 4$）。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出一维高斯之间 KL 散度的解析公式
+    \[
+    D_{\mathrm{KL}}\!\big(\mathcal{N}(\mu_1, \sigma_1^2) \,\|\, \mathcal{N}(\mu_2, \sigma_2^2)\big) = ?
+    \]
+    \item 计算 $D_{\mathrm{KL}}(p \,\|\, q)$（保留 3 位小数）。
+    \item 计算 $D_{\mathrm{KL}}(q \,\|\, p)$（保留 3 位小数）。
+    \item 比较两者大小，并用一句话说明 KL 散度不对称性的实际含义（zero-forcing vs. mean-seeking）。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 4 题：VAE 的 KL 正则项]
+VAE 编码器输出对角高斯
+\[
+q_\phi(z|x) = \mathcal{N}\!\big(\mu, \, \mathrm{diag}(\sigma^2)\big),
+\]
+先验为标准高斯 $p(z) = \mathcal{N}(0, I)$。给定隐空间维度 $d = 3$，
+\[
+\mu = (0.5, \, -0.5, \, 1.0), \qquad \sigma^2 = (0.5, \, 1.5, \, 0.4).
+\]
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出 $D_{\mathrm{KL}}(q_\phi \,\|\, p)$ 的逐分量解析公式。
+    \item 计算每个分量的 KL 贡献（保留 3 位小数）。
+    \item 给出总 KL 值（nats）。
+    \item 哪个分量贡献最大？结合 $\mu_j$ 和 $\sigma_j^2$ 偏离 $(0, 1)$ 的程度与方向解释原因。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 5 题：LQR 与代数 Riccati 方程]
+连续时间一维线性系统
+\[
+\dot{x} = -x + 2u,
+\]
+无穷时域代价
+\[
+J = \int_0^\infty \big( 4 x^2 + u^2 \big) \, dt.
+\]
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出对应的代数 Riccati 方程（即 $\dot{P} = 0$ 时的稳态方程）。
+    \item 求稳态正解 $P > 0$（保留 3 位小数）。
+    \item 给出最优反馈控制律 $u^*(x) = K x$ 的反馈增益 $K$。
+    \item 计算闭环系统 $\dot{x} = (a + bK) x$ 的极点，并验证闭环稳定性。
+    \item 与开环（$u \equiv 0$，注意原系统 $\dot{x} = -x$ 本就稳定）相比，闭环极点把"收敛速率"提速了多少倍？
+\end{enumerate}
+\end{problem}
+
+\bigskip
+
+%========================================
+\section*{第二部分：在线优化与 Regret 框架}
+%========================================
+
+\begin{problem}[第 6 题：MWU 手算 3 轮]
+3 个专家，学习率 $\eta = 0.4$，初始权重 $w^{(1)} = (1, 1, 1)$。损失序列：
+\begin{align*}
+\ell_1 &= (0.5,\ 0.2,\ 0.8) \\
+\ell_2 &= (0.3,\ 0.7,\ 0.4) \\
+\ell_3 &= (0.6,\ 0.3,\ 0.1)
+\end{align*}
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出每轮的概率分布 $p^{(t)}$ 与算法的期望损失 $L_t = \sum_i p_i^{(t)} \ell_t(i)$。
+    \item 写出每轮乘法更新后的权重向量 $w^{(t+1)}$。
+    \item 计算 3 轮的总期望损失 $\sum_{t=1}^3 L_t$。
+    \item 找出最优固定专家 $i^*$ 及其总损失 $L^* = \sum_t \ell_t(i^*)$。
+    \item 计算 Regret，并与 MWU 的理论上界 $\frac{\ln N}{\eta} + \eta T$（$N = 3$，$T = 3$）作对比。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 7 题：Hoeffding 不等式与样本量]
+要用样本均值 $\bar{X}$ 估计真实概率 $p \in [0, 1]$，要求 95\% 把握下误差不超过 $\epsilon$，即 $\Pr(|\bar{X} - p| > \epsilon) \leq 0.05$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 由 Hoeffding 不等式 $\Pr(|\bar{X} - p| \geq \epsilon) \leq 2 e^{-2 n \epsilon^2}$，推导最少样本量 $n$ 关于 $\epsilon$ 的表达式。
+    \item 取 $\epsilon = 0.02$，最少需要多少样本？
+    \item 若把误差减半至 $\epsilon = 0.01$，最少需要多少样本？是 (b) 的多少倍？这个倍数与 $1/\epsilon^2$ 的关系是什么？
+    \item 反过来：若只能做 $n = 200$ 次实验，由 Hoeffding 给出"误差 $\leq 0.05$"的概率下界。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 8 题：UCB 决策]
+4 个 arm，已运行 $t = 14$ 轮，当前观测：
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+arm $a$ & 拉的次数 $n_a$ & 经验均值 $\hat{\mu}_a$ \\
+\midrule
+1 & 5 & 0.40 \\
+2 & 3 & 0.60 \\
+3 & 2 & 0.50 \\
+4 & 4 & 0.55 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出 UCB1 的表达式 $\mathrm{UCB}_a(t) = \hat{\mu}_a + \sqrt{2 \ln t / n_a}$，并指出哪一项是"探索奖励"。
+    \item 计算每个 arm 的 UCB 值（保留 3 位小数）。
+    \item 给出第 15 轮的选择，并解释为什么经验均值最大的 arm 不一定被选中（用"探索--利用"的语言）。
+    \item 假设真实差距向量为 $\Delta = (0.3, 0.0, 0.2, 0.1)$（即 arm 2 是最优），由理论 Regret 上界
+    \[
+    \mathrm{Regret}_T \leq \sum_{a:\, \Delta_a > 0} \frac{8 \ln T}{\Delta_a}
+    \]
+    估算 $T = 10000$ 时的总 Regret 上界。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 9 题：Thompson Sampling 后验比较]
+两个 Bernoulli arm，先验均为 $\mathrm{Beta}(1, 1)$，已观测：
+\begin{itemize}
+    \item arm A：8 次成功、2 次失败 \;$\Rightarrow$\; 后验 $\mathrm{Beta}(9, 3)$
+    \item arm B：3 次成功、7 次失败 \;$\Rightarrow$\; 后验 $\mathrm{Beta}(4, 8)$
+\end{itemize}
+
+\begin{enumerate}[label=(\alph*)]
+    \item 用公式
+    \[
+    \mu = \frac{\alpha}{\alpha + \beta}, \qquad \sigma^2 = \frac{\alpha \beta}{(\alpha + \beta)^2 (\alpha + \beta + 1)}
+    \]
+    分别写出 arm A 与 arm B 后验的均值 $\mu$ 与标准差 $\sigma$。
+
+    \item 用正态近似估计
+    \[
+    \Pr\!\big(\theta_A > \theta_B \,\big|\, \text{data}\big),
+    \]
+    即 Thompson Sampling 选 arm A 的近似概率。
+
+    \item 假设再采样一次 arm A，观测为成功（后验更新为 $\mathrm{Beta}(10, 3)$，arm B 后验不变）。重新计算 (a) 与 (b)，并说明这次新观测如何改变了选择概率。
+
+    \item 思考题（无需数值）：若两个 arm 的差距 $\hat{\mu}_A - \hat{\mu}_B$ 不变，但样本量都翻倍，$\Pr(\theta_A > \theta_B)$ 会怎么变？请用一句话说明（不需要严格证明）。
+\end{enumerate}
+\end{problem}
+
+\begin{problem}[第 10 题：Knowledge Gradient 与最优学习]
+\textbf{背景}：在最优学习问题中，目标不是最小化累积 Regret，而是最大化\textbf{最终决策}的质量。Knowledge Gradient (KG) 衡量\textbf{下一次实验}带来的期望决策改进。
+
+\medskip
+\textbf{设定}：4 个候选方案，当前后验 $\mu_a \sim \mathcal{N}(\hat{\mu}_a, \sigma_a^2)$，每次实验观测 $y \sim \mathcal{N}(\mu_a, \sigma_\epsilon^2)$，观测噪声 $\sigma_\epsilon = 0.1$（对所有 arm 相同）。
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+arm $a$ & 后验均值 $\hat{\mu}_a$ & 后验标准差 $\sigma_a$ \\
+\midrule
+1 & 0.70 & 0.05 \\
+2 & 0.65 & 0.20 \\
+3 & 0.50 & 0.30 \\
+4 & 0.68 & 0.10 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\medskip
+\textbf{KG 公式}：测量 arm $a$ 后，更新后估计可写为 $\hat{\mu}_a^{\text{新}} = \hat{\mu}_a + \tilde{\sigma}_a Z$，$Z \sim \mathcal{N}(0,1)$，其中
+\[
+\tilde{\sigma}_a = \frac{\sigma_a^2}{\sqrt{\sigma_a^2 + \sigma_\epsilon^2}}.
+\]
+KG 的解析形式：
+\[
+\mathrm{KG}(a) = \tilde{\sigma}_a \cdot g(z_0^{(a)}), \qquad
+z_0^{(a)} = \frac{\big| \hat{\mu}_a - \nu_{-a} \big|}{\tilde{\sigma}_a}, \qquad
+\nu_{-a} = \max_{a' \neq a} \hat{\mu}_{a'},
+\]
+其中
+\[
+g(z) = \phi(z) - z \big(1 - \Phi(z)\big), \quad z \geq 0.
+\]
+($g$ 是"标准正态截断期望"，可由 $\mathbb{E}[(Z - z)^+] = \phi(z) - z(1 - \Phi(z))$ 推出。)
+
+\begin{enumerate}[label=(\alph*)]
+    \item 对每个 arm 计算有效后验更新标准差 $\tilde{\sigma}_a$ 与"对手最佳" $\nu_{-a}$。
+
+    \item 计算每个 arm 的 $z_0^{(a)}$ 与 $\mathrm{KG}(a)$（保留 4 位小数）。
+
+    \item 给出下一次实验应该选择的 arm（即 $\arg\max_a \mathrm{KG}(a)$）。
+
+    \item \textbf{对比贪心}：如果不再实验、立刻 commit，将选择 $\hat{\mu}_a$ 最大的 arm，决策值为 $\max_a \hat{\mu}_a$。这个值是多少？用 (b) 中最大的 KG 值\textbf{量化"再做一次实验的信息价值"}。
+
+    \item \textbf{现象解释}：观察 (b) 的结果——是否存在 $\hat{\mu}_a$ 更低、但 $\mathrm{KG}$ 反而更大的 arm？指出是哪两个 arm 的对比，并解释为什么（从 $\tilde{\sigma}_a$ 与 $z_0^{(a)}$ 两个因素分析）。
+
+    \item \textbf{噪声敏感性}：将观测噪声从 $\sigma_\epsilon = 0.1$ 增大到 $\sigma_\epsilon = 0.5$（噪声很大），重新计算 arm 3 的 $\tilde{\sigma}_3$ 和 $\mathrm{KG}(3)$。说明：当观测噪声远大于后验不确定性时，单次实验的信息价值会发生什么变化？
+\end{enumerate}
+\end{problem}
+
+\end{document}

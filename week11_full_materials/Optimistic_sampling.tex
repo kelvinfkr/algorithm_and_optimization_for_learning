@@ -1,0 +1,2342 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{framed}
+\usepackage{cancel}
+
+\geometry{margin=2.5cm}
+\pgfplotsset{compat=1.17}
+
+% 定理环境
+\theoremstyle{definition}
+\newtheorem{definition}{定义}[section]
+\newtheorem{example}{例}[section]
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}{引理}[section]
+\newtheorem{remark}{注记}[section]
+
+% 自定义盒子
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{intuition}[1][直觉]{
+  colback=blue!5!white,
+  colframe=blue!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{keypoint}[1][关键点]{
+  colback=red!5!white,
+  colframe=red!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{plainwords}[1][大白话]{
+  colback=yellow!8!white,
+  colframe=yellow!60!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{proofidea}[1][证明思路]{
+  colback=green!5!white,
+  colframe=green!50!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{magicbox}[1][神奇结果]{
+  colback=purple!5!white,
+  colframe=purple!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{calculation}[1][动手算一算]{
+  colback=orange!5!white,
+  colframe=orange!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\title{\textbf{第11周：在线优化与Regret框架} \\[0.5em]
+\large 从Multiplicative Weights到Bandit，再到贝叶斯最优学习}
+\author{优化算法课程讲义}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本讲我们进入一个\textbf{信息受限}的世界：边做决策边学习，甚至看不到"如果当时选了别的会怎样"。神奇的是，即使面对一个处心积虑要坑你的对手，我们的后悔值也只有$O(\sqrt{T})$——平均每轮的后悔趋于零！
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{开场：这门课在讲什么？}
+%=============================================================================
+
+\begin{plainwords}
+想象你刚到一个新城市，要选餐厅吃饭。
+
+\textbf{情况1}：你有一本完整的点评手册，可以先看完所有餐厅评分再决定去哪家。这是\textbf{监督学习}——信息完整，决策简单。
+
+\textbf{情况2}：你没有手册，但每次吃完一家，你能看到当天所有餐厅的评分（比如朋友圈都在晒）。这是\textbf{在线学习}——信息逐步揭示，但你能看到"没选的那些怎么样"。
+
+\textbf{情况3}：你没有手册，吃完一家只知道这家好不好吃，其他餐厅今天表现如何完全不知道。这是\textbf{Bandit问题}——信息最少，最难！
+
+今天的问题是：\textbf{在信息这么少的情况下，我们还能学得多好？}
+\end{plainwords}
+
+\begin{example}[股票投资的三种视角]
+3只股票，10天：
+
+\textbf{监督学习}：先看完10天数据，选累计涨最多的。简单！
+
+\textbf{在线学习}：第1天选A，收盘看到A涨5\%，B跌2\%，C涨1\%。第2天可以换。
+
+\textbf{Bandit}：第1天选A，只知道A涨5\%。B和C今天涨跌？不知道！
+\end{example}
+
+%=============================================================================
+\section{Regret：后悔值}
+%=============================================================================
+
+\begin{plainwords}
+Regret就是\textbf{后悔程度}的数学定义。
+
+想象游戏结束后，上帝告诉你："其实你要是一直选专家2，总共只亏100块；但你瞎选来选去，亏了150块。"
+
+那50块的差距，就是你的Regret。
+
+\textbf{注意}：我们比的是"一直选某一个固定选项"的最佳结果，不是"每轮都选当时最好的"——后者是上帝视角，凡人做不到。
+\end{plainwords}
+
+\begin{definition}[Regret]
+\[
+\text{Regret}_T = \underbrace{\sum_{t=1}^T \ell_t(x_t)}_{\text{你的总损失}} - \underbrace{\min_{x \in \mathcal{X}} \sum_{t=1}^T \ell_t(x)}_{\text{最佳固定策略}}
+\]
+\end{definition}
+
+\begin{calculation}[Regret的具体计算]
+2个专家，5轮，损失在0到1之间（越小越好）：
+
+\begin{center}
+\begin{tabular}{c|cc|c|c}
+\toprule
+轮次 & 专家1损失 & 专家2损失 & 你选谁 & 你的损失 \\
+\midrule
+1 & 0.3 & 0.7 & 专家1 & 0.3 \\
+2 & 0.8 & 0.4 & 专家1 & 0.8 \\
+3 & 0.5 & 0.5 & 专家2 & 0.5 \\
+4 & 0.9 & 0.2 & 专家2 & 0.2 \\
+5 & 0.4 & 0.6 & 专家1 & 0.4 \\
+\midrule
+总计 & 2.9 & 2.4 & — & 2.2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{你的总损失} = $0.3 + 0.8 + 0.5 + 0.2 + 0.4 = 2.2$
+
+\textbf{最佳固定策略}：一直选专家2，总损失 = $0.7 + 0.4 + 0.5 + 0.2 + 0.6 = 2.4$
+
+\textbf{Regret} = $2.2 - 2.4 = -0.2$
+
+负的！说明你比"一直选专家2"还好。因为你能动态切换。
+\end{calculation}
+
+\begin{plainwords}[负的Regret？]
+Regret可以是负的！这说明动态切换比傻傻坚持一个选项更好。
+
+但问题是：如果对手知道你的策略，专门设计损失来坑你呢？
+\end{plainwords}
+
+\begin{calculation}[被对手坑惨的例子]
+你的策略："跟着赢家走"——谁昨天表现好，今天就选谁。
+
+对手知道你的策略，故意这样设计损失：
+
+\begin{center}
+\begin{tabular}{c|cc|c|c}
+\toprule
+轮次 & 专家1损失 & 专家2损失 & 你选谁（跟昨天赢家） & 你的损失 \\
+\midrule
+1 & 1 & 0 & 随机选1 & 1 \\
+2 & 0 & 1 & 选2（昨天2赢了） & 1 \\
+3 & 1 & 0 & 选1（昨天1赢了） & 1 \\
+4 & 0 & 1 & 选2 & 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+对手让你\textbf{每轮都选错}！
+
+$T=1000$轮后：
+\begin{itemize}
+    \item 你的总损失 = 1000
+    \item 专家1的总损失 = 500
+    \item 专家2的总损失 = 500
+    \item \textbf{Regret = 1000 - 500 = 500}
+\end{itemize}
+
+Regret是$T/2$，线性增长！平均每轮后悔0.5，永远不会变好。
+\end{calculation}
+
+\begin{keypoint}[Regret的量级意味着什么]
+假设跑$T = 10000$轮：
+
+\begin{center}
+\begin{tabular}{c|c|c|l}
+\toprule
+Regret量级 & 具体值 & 平均每轮 & 含义 \\
+\midrule
+$O(T)$ & 5000 & 0.5 & 废了，没学到东西 \\
+$O(\sqrt{T})$ & 100 & 0.01 & \textbf{牛！}平均后悔趋于0 \\
+$O(\log T)$ & 9.2 & 0.00092 & 超牛，但需要更强假设 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{目标}：设计算法，让Regret只有$O(\sqrt{T})$，这样时间越长我们越接近最优！
+\end{keypoint}
+
+%=============================================================================
+\section{Multiplicative Weights：指数惩罚}
+%=============================================================================
+
+\begin{plainwords}
+核心思想很简单：\textbf{给每个专家打分，表现差的扣分，扣分用乘法不用减法}。
+
+为什么用乘法？因为乘法是\textbf{指数惩罚}！
+
+假设某专家连续表现差：
+\begin{itemize}
+    \item 减法：$100 - 10 - 10 - 10 = 70$（线性下降）
+    \item 乘法：$100 \times 0.9 \times 0.9 \times 0.9 = 72.9$，继续乘下去很快趋于0
+\end{itemize}
+
+乘法让\textbf{差的专家很快被遗忘}，好的专家权重相对越来越大。
+\end{plainwords}
+
+\begin{algorithm}[H]
+\caption{Multiplicative Weights Update (MWU)}
+\begin{algorithmic}[1]
+\State 每个专家初始权重 $w_i = 1$
+\State 选一个学习率 $\eta$（比如0.1）
+\For{每一轮 $t = 1, 2, \ldots, T$}
+    \State 计算概率：$p_i = \frac{w_i}{\sum_j w_j}$（权重归一化）
+    \State 按概率随机选一个专家
+    \State 看到所有专家的损失$\ell_t(i)$（0到1之间）
+    \State \textbf{乘法更新}：$w_i \leftarrow w_i \times (1 - \eta \cdot \ell_t(i))$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{calculation}[MWU完整手算]
+3个专家，$\eta = 0.5$，初始权重$w = (1, 1, 1)$。
+
+\textbf{第1轮}：损失$\ell_1 = (0.8, 0.2, 0.5)$
+
+概率（归一化）：$p = (1/3, 1/3, 1/3) = (0.33, 0.33, 0.33)$
+
+更新权重：
+\begin{align*}
+w_1 &= 1 \times (1 - 0.5 \times 0.8) = 1 \times 0.6 = 0.6 \\
+w_2 &= 1 \times (1 - 0.5 \times 0.2) = 1 \times 0.9 = 0.9 \\
+w_3 &= 1 \times (1 - 0.5 \times 0.5) = 1 \times 0.75 = 0.75
+\end{align*}
+
+现在$w = (0.6, 0.9, 0.75)$，总权重$W = 2.25$。
+
+\textbf{第2轮}：损失$\ell_2 = (0.3, 0.9, 0.4)$
+
+概率：$p = (0.6/2.25, 0.9/2.25, 0.75/2.25) = (0.27, 0.40, 0.33)$
+
+专家2概率最高（第1轮表现最好）。
+
+更新权重：
+\begin{align*}
+w_1 &= 0.6 \times (1 - 0.5 \times 0.3) = 0.6 \times 0.85 = 0.51 \\
+w_2 &= 0.9 \times (1 - 0.5 \times 0.9) = 0.9 \times 0.55 = 0.495 \\
+w_3 &= 0.75 \times (1 - 0.5 \times 0.4) = 0.75 \times 0.8 = 0.6
+\end{align*}
+
+现在$w = (0.51, 0.495, 0.6)$。
+
+\textbf{注意}：专家2第2轮损失0.9（很差），权重从最高的0.9暴跌到最低的0.495！
+
+这就是乘法更新的威力：一次大失误，立刻惩罚到位。
+\end{calculation}
+
+\begin{calculation}[指数惩罚有多狠]
+某专家\textbf{连续$k$轮}损失都是1（最差），$\eta = 0.1$：
+
+权重变化：$w = (1-0.1)^k = 0.9^k$
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+连续差的轮数$k$ & 权重$0.9^k$ & 占初始的比例 \\
+\midrule
+5 & 0.59 & 59\% \\
+10 & 0.35 & 35\% \\
+20 & 0.12 & 12\% \\
+50 & 0.005 & 0.5\% \\
+100 & 0.00003 & 0.003\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+50轮后权重只剩0.5\%，这个专家几乎被\textbf{完全遗忘}了！
+\end{calculation}
+
+\subsection{MWU的Regret界}
+
+\begin{theorem}[MWU的Regret]
+如果选$\eta \leq 1/2$，则MWU的期望Regret满足：
+\[
+\mathbb{E}[\text{Regret}_T] \leq \frac{\ln N}{\eta} + \eta T
+\]
+取$\eta = \sqrt{\frac{\ln N}{T}}$，得到：
+\[
+\mathbb{E}[\text{Regret}_T] \leq 2\sqrt{T \ln N}
+\]
+\end{theorem}
+
+\begin{plainwords}[证明的直觉]
+证明的核心是追踪\textbf{总权重}$W^{(t)} = \sum_i w_i^{(t)}$。
+
+想象总权重是一个水池：
+\begin{itemize}
+    \item \textbf{上界}：你表现越差，水流失越快
+    \item \textbf{下界}：但最好那个专家的水还在，撑住底线
+\end{itemize}
+
+水池不能比最好专家那一份还少，但你的损失在让水流失。这两个约束一夹，就得出了Regret的界！
+\end{plainwords}
+
+\begin{proof}
+证明分四步。
+
+\textbf{Step 1：两个关键不等式}
+
+\begin{lemma}
+对所有$x < 1$：$\ln(1-x) \leq -x$
+\end{lemma}
+\begin{proof}
+令$g(x) = -x - \ln(1-x)$，则$g(0) = 0$，$g'(x) = -1 + \frac{1}{1-x} = \frac{x}{1-x} \geq 0$当$x \geq 0$。
+
+所以$g(x) \geq 0$，即$\ln(1-x) \leq -x$。
+\end{proof}
+
+验证：$x = 0.1$时，$\ln(0.9) = -0.105$，$-x = -0.1$。确实$-0.105 \leq -0.1$。\checkmark
+
+\begin{lemma}
+当$x \leq 1/2$时：$\ln(1-x) \geq -x - x^2$
+\end{lemma}
+\begin{proof}
+Taylor展开：$\ln(1-x) = -x - \frac{x^2}{2} - \frac{x^3}{3} - \cdots$
+
+当$x \leq 1/2$时，$\frac{x^2}{2} + \frac{x^3}{3} + \cdots \leq x^2(\frac{1}{2} + \frac{1}{4} + \cdots) = x^2$。
+
+所以$\ln(1-x) \geq -x - x^2$。
+\end{proof}
+
+验证：$x = 0.3$时，$\ln(0.7) = -0.357$，$-x - x^2 = -0.39$。确实$-0.357 \geq -0.39$。\checkmark
+
+\textbf{Step 2：总权重的上界}
+
+设$L_t = \sum_i p_i^{(t)} \ell_t(i)$是你在第$t$轮的期望损失。
+
+总权重的演化：
+\begin{align*}
+W^{(t+1)} &= \sum_i w_i^{(t)}(1 - \eta \ell_t(i)) \\
+&= \sum_i w_i^{(t)} - \eta \sum_i w_i^{(t)} \ell_t(i) \\
+&= W^{(t)} - \eta W^{(t)} \underbrace{\sum_i \frac{w_i^{(t)}}{W^{(t)}} \ell_t(i)}_{= L_t} \\
+&= W^{(t)} (1 - \eta L_t)
+\end{align*}
+
+取对数：
+\[
+\ln W^{(t+1)} = \ln W^{(t)} + \ln(1 - \eta L_t)
+\]
+
+由引理1（因为$\eta L_t \leq \eta \leq 1/2 < 1$）：
+\[
+\ln W^{(t+1)} \leq \ln W^{(t)} - \eta L_t
+\]
+
+累加从$t=1$到$T$：
+\[
+\ln W^{(T+1)} \leq \ln W^{(1)} - \eta \sum_{t=1}^T L_t = \ln N - \eta \sum_{t=1}^T L_t
+\]
+
+\textbf{Step 3：总权重的下界}
+
+设最佳专家是$i^*$，其总损失为$L^* = \sum_{t=1}^T \ell_t(i^*)$。
+
+总权重至少包含最佳专家的权重：
+\[
+W^{(T+1)} \geq w_{i^*}^{(T+1)} = \prod_{t=1}^T (1 - \eta \ell_t(i^*))
+\]
+
+取对数：
+\[
+\ln W^{(T+1)} \geq \sum_{t=1}^T \ln(1 - \eta \ell_t(i^*))
+\]
+
+由引理2（因为$\eta \ell_t(i^*) \leq \eta \leq 1/2$）：
+\[
+\ln W^{(T+1)} \geq \sum_{t=1}^T \left(-\eta \ell_t(i^*) - \eta^2 \ell_t(i^*)^2\right) \geq -\eta L^* - \eta^2 T
+\]
+
+最后一步用了$\ell_t(i^*)^2 \leq \ell_t(i^*) \leq 1$。
+
+\textbf{Step 4：合并上下界}
+
+从Step 2和Step 3：
+\[
+-\eta L^* - \eta^2 T \leq \ln W^{(T+1)} \leq \ln N - \eta \sum_{t=1}^T L_t
+\]
+
+整理：
+\[
+\eta \sum_{t=1}^T L_t - \eta L^* \leq \ln N + \eta^2 T
+\]
+\[
+\sum_{t=1}^T L_t - L^* \leq \frac{\ln N}{\eta} + \eta T
+\]
+
+左边正是期望Regret！
+
+\textbf{Step 5：最优$\eta$}
+
+令$f(\eta) = \frac{\ln N}{\eta} + \eta T$，求最小值：
+\[
+f'(\eta) = -\frac{\ln N}{\eta^2} + T = 0 \implies \eta^* = \sqrt{\frac{\ln N}{T}}
+\]
+
+代入：
+\[
+\text{Regret}_T \leq \frac{\ln N}{\sqrt{\ln N/T}} + \sqrt{\frac{\ln N}{T}} \cdot T = \sqrt{T \ln N} + \sqrt{T \ln N} = 2\sqrt{T \ln N}
+\]
+\end{proof}
+
+\begin{calculation}[代数字感受一下]
+$N = 100$个专家，$T = 10000$轮：
+
+$\ln N = \ln 100 = 4.6$
+
+最优$\eta = \sqrt{4.6 / 10000} = \sqrt{0.00046} = 0.021$
+
+$\text{Regret} \leq 2\sqrt{10000 \times 4.6} = 2 \times 214 = 428$
+
+\textbf{平均每轮后悔} = $428 / 10000 = 0.043$
+
+即使有100个专家，对手随便怎么坑你，你平均每轮也只比"事后看来最好的那个"多亏0.043！
+\end{calculation}
+
+\begin{plainwords}[证明的直觉]
+证明的核心是追踪\textbf{总权重}$W = \sum_i w_i$。
+
+想象总权重是一个水池：
+\begin{itemize}
+    \item \textbf{上界}：你表现越差，水流失越快
+    \item \textbf{下界}：但最好那个专家的水还在，撑住底线
+\end{itemize}
+
+水池不能比最好专家那一份还少，但你的损失在让水流失。
+
+这两个约束一夹，就得出了Regret的界！
+\end{plainwords}
+
+\begin{calculation}[证明中的关键计算]
+\textbf{关键不等式}：$\ln(1-x) \leq -x$
+
+验证：$x = 0.1$时，$\ln(0.9) = -0.105$，$-x = -0.1$。
+
+确实$-0.105 < -0.1$。不等式成立！
+
+\textbf{第二个}：$\ln(1-x) \geq -x - x^2$（当$x \leq 0.5$）
+
+验证：$x = 0.3$时，$\ln(0.7) = -0.357$，$-x - x^2 = -0.39$。
+
+确实$-0.357 > -0.39$。成立！
+
+这两个不等式是证明的核心工具。
+\end{calculation}
+
+%=============================================================================
+\section{Hoeffding不等式：估计有多准}
+%=============================================================================
+
+\begin{plainwords}
+现在我们要解决一个基本问题：\textbf{采样$n$次，估计能有多准？}
+
+比如你投硬币10次，7次正面，估计正面概率是0.7。
+
+但真实概率可能是0.5、0.6、0.8...你的估计离真实值有多远？
+
+Hoeffding不等式告诉我们：\textbf{偏差大的概率指数级衰减}！采样越多，估计越准。
+\end{plainwords}
+
+\begin{theorem}[Hoeffding不等式]
+$n$个独立样本$X_i \in [0,1]$，样本均值$\bar{X} = \frac{1}{n}\sum X_i$，真实均值$\mu$，则：
+\[
+P(|\bar{X} - \mu| \geq \epsilon) \leq 2e^{-2n\epsilon^2}
+\]
+\end{theorem}
+
+\begin{proofidea}[证明思路]
+完整证明需要用到Chernoff bound技术，这里给出核心思路。
+\end{proofidea}
+
+\begin{proof}[证明梗概]
+\textbf{Step 1：Markov不等式}
+
+对任意非负随机变量$Y$和$a > 0$：
+\[
+P(Y \geq a) \leq \frac{\mathbb{E}[Y]}{a}
+\]
+
+\textbf{Step 2：Chernoff技巧}
+
+对任意$s > 0$：
+\[
+P(\bar{X} - \mu \geq \epsilon) = P(e^{s(\bar{X} - \mu)} \geq e^{s\epsilon}) \leq \frac{\mathbb{E}[e^{s(\bar{X} - \mu)}]}{e^{s\epsilon}}
+\]
+
+\textbf{Step 3：关键引理（Hoeffding引理）}
+
+如果$X \in [a, b]$且$\mathbb{E}[X] = 0$，则对任意$s > 0$：
+\[
+\mathbb{E}[e^{sX}] \leq e^{s^2(b-a)^2/8}
+\]
+
+\textit{证明要点}：$e^{sx}$是凸函数，可以用$[a,b]$两端点的线性组合上界。然后对这个上界取期望，再用$e^x \leq 1 + x + x^2$型不等式。
+
+\textbf{Step 4：应用到样本均值}
+
+令$Y_i = X_i - \mu$，则$Y_i \in [-\mu, 1-\mu] \subset [-1, 1]$，$\mathbb{E}[Y_i] = 0$。
+
+\begin{align*}
+\mathbb{E}[e^{s(\bar{X} - \mu)}] &= \mathbb{E}\left[e^{s \cdot \frac{1}{n}\sum_i Y_i}\right] = \mathbb{E}\left[\prod_i e^{sY_i/n}\right] \\
+&= \prod_i \mathbb{E}[e^{sY_i/n}] \quad \text{（独立性）} \\
+&\leq \prod_i e^{s^2/(8n^2)} = e^{s^2/(8n)}
+\end{align*}
+
+所以：
+\[
+P(\bar{X} - \mu \geq \epsilon) \leq e^{s^2/(8n) - s\epsilon}
+\]
+
+\textbf{Step 5：最优化$s$}
+
+令$f(s) = \frac{s^2}{8n} - s\epsilon$，求最小值：$f'(s) = \frac{s}{4n} - \epsilon = 0 \implies s^* = 4n\epsilon$
+
+代入：
+\[
+P(\bar{X} - \mu \geq \epsilon) \leq e^{\frac{16n^2\epsilon^2}{8n} - 4n\epsilon^2} = e^{2n\epsilon^2 - 4n\epsilon^2} = e^{-2n\epsilon^2}
+\]
+
+对$P(\bar{X} - \mu \leq -\epsilon)$同理，合并得：
+\[
+P(|\bar{X} - \mu| \geq \epsilon) \leq 2e^{-2n\epsilon^2}
+\]
+\end{proof}
+
+\begin{calculation}[投硬币的例子]
+投$n=100$次硬币，想知道估计误差超过$\epsilon = 0.1$的概率。
+
+\[
+P(|\hat{p} - p| \geq 0.1) \leq 2e^{-2 \times 100 \times 0.1^2} = 2e^{-2} = 2 \times 0.135 = 0.27
+\]
+
+还有27\%的概率误差超过0.1，不够准！
+
+投$n=500$次：
+\[
+P(|\hat{p} - p| \geq 0.1) \leq 2e^{-2 \times 500 \times 0.01} = 2e^{-10} = 2 \times 0.000045 = 0.00009
+\]
+
+万分之一！基本不可能误差超过0.1。
+
+投$n=1000$次：
+\[
+P \leq 2e^{-20} \approx 4 \times 10^{-9}
+\]
+
+十亿分之四，几乎确定误差小于0.1。
+\end{calculation}
+
+\begin{calculation}[构造95\%置信区间]
+反过来问：我想要95\%的把握误差不超过$\epsilon$，$\epsilon$是多少？
+
+令$2e^{-2n\epsilon^2} = 0.05$（5\%的错误概率）：
+\begin{align*}
+e^{-2n\epsilon^2} &= 0.025 \\
+-2n\epsilon^2 &= \ln(0.025) = -3.69 \\
+\epsilon &= \sqrt{\frac{3.69}{2n}} = \sqrt{\frac{1.84}{n}}
+\end{align*}
+
+\begin{center}
+\begin{tabular}{c|c|l}
+\toprule
+样本数$n$ & 95\%置信区间半宽 & 如果观测到0.7 \\
+\midrule
+10 & $\sqrt{1.84/10} = 0.43$ & 真值在$[0.27, 1.0]$ \\
+100 & $\sqrt{1.84/100} = 0.14$ & 真值在$[0.56, 0.84]$ \\
+1000 & $\sqrt{1.84/1000} = 0.04$ & 真值在$[0.66, 0.74]$ \\
+10000 & $\sqrt{1.84/10000} = 0.01$ & 真值在$[0.69, 0.71]$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{calculation}
+
+\begin{keypoint}[$1/\sqrt{n}$的收敛速度]
+置信区间宽度 $\propto 1/\sqrt{n}$。
+
+这意味着：
+\begin{itemize}
+    \item 想把误差减半，需要4倍样本
+    \item 想把误差减到1/10，需要100倍样本
+\end{itemize}
+
+这就是为什么\textbf{Regret是$O(\sqrt{T})$}——因为我们获取信息的速度就是$\sqrt{T}$！
+\end{keypoint}
+
+%=============================================================================
+\section{Multi-Armed Bandit：探索与利用}
+%=============================================================================
+
+\begin{plainwords}
+Bandit问题就像在赌场玩老虎机：
+
+\begin{itemize}
+    \item 面前有$K$台老虎机，每台中奖概率不同（但你不知道）
+    \item 每次只能选一台拉
+    \item 拉完只知道这台中没中，其他台的情况不知道
+    \item 目标：拉$T$次，总收益最大
+\end{itemize}
+
+核心困境：
+\begin{itemize}
+    \item \textbf{探索}（Exploration）：多试试不熟悉的机器，可能发现宝藏
+    \item \textbf{利用}（Exploitation）：一直拉目前看起来最好的，稳定收益
+\end{itemize}
+
+只探索 = 浪费时间在差机器上；只利用 = 可能错过真正最好的。
+
+怎么平衡？
+\end{plainwords}
+
+\begin{example}[5台老虎机]
+真实中奖概率（你不知道）：$\mu = (0.3, 0.5, 0.7, 0.4, 0.6)$
+
+最优策略：一直拉机器3，期望收益$0.7 \times T$。
+
+但你不知道机器3最好！你得边拉边猜。
+\end{example}
+
+\begin{calculation}[Regret的来源]
+假设$T=1000$轮，你的选择如下：
+
+\begin{center}
+\begin{tabular}{c|c|c|c|c}
+\toprule
+机器 & 真实$\mu$ & 拉了几次 & 期望收益 & 本该多得（机会成本） \\
+\midrule
+1 & 0.3 & 50 & $50 \times 0.3 = 15$ & $50 \times (0.7-0.3) = 20$ \\
+2 & 0.5 & 100 & $100 \times 0.5 = 50$ & $100 \times (0.7-0.5) = 20$ \\
+\textbf{3} & \textbf{0.7} & \textbf{700} & $700 \times 0.7 = 490$ & $0$ \\
+4 & 0.4 & 80 & $80 \times 0.4 = 32$ & $80 \times (0.7-0.4) = 24$ \\
+5 & 0.6 & 70 & $70 \times 0.6 = 42$ & $70 \times (0.7-0.6) = 7$ \\
+\midrule
+总计 & — & 1000 & 629 & 71 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+最优收益 = $1000 \times 0.7 = 700$
+
+你的收益 = 629
+
+\textbf{Regret = 700 - 629 = 71}
+
+这71就是你"探索"和"选错"付出的代价。
+\end{calculation}
+
+\subsection{$\epsilon$-Greedy：最简单的方法}
+
+\begin{plainwords}
+$\epsilon$-Greedy超简单：
+
+\begin{itemize}
+    \item 以$1-\epsilon$概率（比如90\%）：选目前估计最好的（\textbf{利用}）
+    \item 以$\epsilon$概率（比如10\%）：随机选一个（\textbf{探索}）
+\end{itemize}
+
+问题：你永远有10\%在瞎选！即使已经很确定哪个最好了。
+\end{plainwords}
+
+\begin{calculation}[$\epsilon$-Greedy的问题]
+$\epsilon = 0.1$，3台机器，当前估计$\hat{\mu} = (0.35, 0.72, 0.68)$。
+
+选择概率：
+\begin{itemize}
+    \item 机器1：$0.1 / 3 = 0.033$（只靠随机探索）
+    \item 机器2：$0.9 + 0.033 = 0.933$（利用+随机）
+    \item 机器3：$0.033$（只靠随机探索）
+\end{itemize}
+
+假设机器2确实最好（$\mu_2 = 0.7$），机器1和3差一点（$\mu = 0.5$）。
+
+$T = 10000$轮的期望Regret：
+
+$\epsilon$-Greedy有10\%概率选到次优，每次损失约$0.7 - 0.5 = 0.2$。
+
+$\text{Regret} \approx 10000 \times 0.1 \times 0.2 = 200$
+
+这是$O(\epsilon T)$——\textbf{线性增长}！不好。
+
+减小$\epsilon$？那探索不够，可能一直选错的。
+\end{calculation}
+
+\subsection{UCB：乐观面对不确定}
+
+\begin{plainwords}
+UCB的核心思想：\textbf{不确定的东西，先当它是好的}！
+
+\begin{itemize}
+    \item 如果它真的好 → 你选对了，太棒了
+    \item 如果它其实不好 → 你试了一次，现在知道它不好了，也不亏
+\end{itemize}
+
+无论哪种情况，你都在进步！这叫\textbf{Optimism in the Face of Uncertainty}（乐观原则）。
+\end{plainwords}
+
+\begin{definition}[UCB值]
+\[
+\text{UCB}_a = \underbrace{\hat{\mu}_a}_{\text{经验均值}} + \underbrace{\sqrt{\frac{2\ln t}{n_a}}}_{\text{探索奖励}}
+\]
+
+每次选UCB值最大的机器。
+\end{definition}
+
+\begin{plainwords}[UCB公式的直觉]
+\begin{itemize}
+    \item $\hat{\mu}_a$：这台机器目前\textbf{看起来}有多好
+    \item $\sqrt{\frac{2\ln t}{n_a}}$：\textbf{不确定性奖励}——拉的次数$n_a$越少，这项越大
+\end{itemize}
+
+拉的少 → 不确定性大 → UCB高 → 会被选中 → 探索！
+
+拉的多 → 不确定性小 → UCB主要看$\hat{\mu}$ → 利用！
+
+\textbf{探索和利用自动平衡了！}
+\end{plainwords}
+
+\begin{calculation}[UCB逐步执行]
+3台机器，真实$\mu = (0.3, 0.7, 0.5)$。
+
+\textbf{第1-3轮}：每台各拉一次（初始化）
+
+结果：机器1输(0)，机器2赢(1)，机器3赢(1)
+
+当前：$\hat{\mu} = (0, 1, 1)$，$n = (1, 1, 1)$
+
+\textbf{第4轮}（$t=4$，$\ln 4 = 1.39$）：
+\begin{align*}
+\text{UCB}_1 &= 0 + \sqrt{\frac{2 \times 1.39}{1}} = 0 + 1.67 = 1.67 \\
+\text{UCB}_2 &= 1 + \sqrt{\frac{2 \times 1.39}{1}} = 1 + 1.67 = 2.67 \\
+\text{UCB}_3 &= 1 + \sqrt{\frac{2 \times 1.39}{1}} = 1 + 1.67 = 2.67
+\end{align*}
+
+机器2和3并列最高，随机选机器2。结果：赢(1)。
+
+更新：$\hat{\mu}_2 = 2/2 = 1$，$n_2 = 2$
+
+\textbf{第5轮}（$t=5$，$\ln 5 = 1.61$）：
+\begin{align*}
+\text{UCB}_1 &= 0 + \sqrt{\frac{2 \times 1.61}{1}} = 0 + 1.79 = 1.79 \\
+\text{UCB}_2 &= 1 + \sqrt{\frac{2 \times 1.61}{2}} = 1 + 1.27 = 2.27 \\
+\text{UCB}_3 &= 1 + \sqrt{\frac{2 \times 1.61}{1}} = 1 + 1.79 = 2.79
+\end{align*}
+
+选机器3！虽然$\hat{\mu}_2 = \hat{\mu}_3 = 1$，但机器3只被拉过1次，不确定性更大，UCB更高。
+
+这就是UCB的智慧：\textbf{自动去探索那些"看起来不错但不太确定"的选项}。
+\end{calculation}
+
+\begin{calculation}[UCB什么时候放弃差机器]
+机器1真实$\mu_1 = 0.3$，机器2真实$\mu_2 = 0.7$，差距$\Delta = 0.4$。
+
+问：UCB要拉机器1多少次才会"放弃"它？
+
+经过足够采样，$\hat{\mu}_1 \approx 0.3$，$\hat{\mu}_2 \approx 0.7$。
+
+要让机器1不再被选，需要$\text{UCB}_1 < \text{UCB}_2$：
+\[
+0.3 + \sqrt{\frac{2\ln T}{n_1}} < 0.7
+\]
+\[
+\sqrt{\frac{2\ln T}{n_1}} < 0.4
+\]
+\[
+\frac{2\ln T}{n_1} < 0.16
+\]
+\[
+n_1 > \frac{2\ln T}{0.16} = 12.5\ln T
+\]
+
+当$T = 10000$时，$\ln T = 9.2$：
+\[
+n_1 > 12.5 \times 9.2 = 115
+\]
+
+机器1被拉\textbf{约115次}后，UCB就会低于机器2，不再被选！
+
+这115次的Regret = $115 \times 0.4 = 46$。
+\end{calculation}
+
+\begin{calculation}[UCB的Regret界]
+$K=5$台机器，$T=10000$轮，$\Delta = (0.4, 0.2, 0, 0.3, 0.1)$。
+
+理论界：$\text{Regret} \leq \sum_{a:\Delta_a > 0} \frac{8\ln T}{\Delta_a}$
+\begin{align*}
+&= \frac{8 \times 9.2}{0.4} + \frac{73.6}{0.2} + 0 + \frac{73.6}{0.3} + \frac{73.6}{0.1} \\
+&= 184 + 368 + 0 + 245 + 736 = 1533
+\end{align*}
+
+另一个界：$O(\sqrt{KT\ln T}) = \sqrt{5 \times 10000 \times 9.2} \approx 678$
+
+实际Regret通常比理论界小很多！
+\end{calculation}
+
+\subsection{UCB的Regret证明}
+
+\begin{theorem}[UCB的Regret界]
+UCB算法的Regret满足：
+\[
+\text{Regret}_T \leq \sum_{a: \Delta_a > 0} \frac{8\ln T}{\Delta_a} + \left(1 + \frac{\pi^2}{3}\right)\sum_a \Delta_a
+\]
+其中$\Delta_a = \mu^* - \mu_a$是arm $a$的次优差距。
+\end{theorem}
+
+\begin{plainwords}[证明的核心思想]
+UCB选错arm只有两种可能：
+\begin{enumerate}
+    \item \textbf{最优arm被低估}：$\hat{\mu}^* + \text{bonus}^* < \mu^*$（置信区间失效）
+    \item \textbf{次优arm被高估}：$\hat{\mu}_a + \text{bonus}_a > \mu^*$（要么置信区间失效，要么bonus太大）
+\end{enumerate}
+
+Hoeffding告诉我们置信区间失效的概率很小（$O(1/t^2)$），所以主要代价来自bonus太大——这需要足够多次采样让bonus缩小到$\Delta_a$以下。
+\end{plainwords}
+
+\begin{proof}
+\textbf{Step 1：分解Regret}
+
+设$N_a(T)$是arm $a$在$T$轮内被选中的次数。
+\[
+\text{Regret}_T = \sum_{a=1}^K \Delta_a \cdot \mathbb{E}[N_a(T)]
+\]
+
+所以关键是bound每个次优arm的期望选中次数。
+
+\textbf{Step 2：UCB选中次优arm $a$的条件}
+
+在时刻$t$，UCB选中arm $a$（而非最优arm $a^*$）意味着：
+\[
+\text{UCB}_a(t) \geq \text{UCB}_{a^*}(t)
+\]
+即：
+\[
+\hat{\mu}_a + \sqrt{\frac{2\ln t}{n_a}} \geq \hat{\mu}_{a^*} + \sqrt{\frac{2\ln t}{n_{a^*}}}
+\]
+
+定义事件：
+\begin{itemize}
+    \item $A_t$：最优arm的置信区间失效，$|\hat{\mu}_{a^*} - \mu^*| > \sqrt{\frac{2\ln t}{n_{a^*}}}$
+    \item $B_t$：次优arm的置信区间失效，$|\hat{\mu}_a - \mu_a| > \sqrt{\frac{2\ln t}{n_a}}$
+\end{itemize}
+
+\textbf{Step 3：置信区间失效的概率}
+
+由Hoeffding不等式，对任意固定的$n$：
+\[
+P\left(|\hat{\mu} - \mu| > \sqrt{\frac{2\ln t}{n}}\right) \leq 2e^{-2n \cdot \frac{2\ln t}{n}} = 2e^{-4\ln t} = \frac{2}{t^4}
+\]
+
+对所有可能的$n$求和（union bound）：
+\[
+P(A_t) \leq \sum_{n=1}^t \frac{2}{t^4} = \frac{2}{t^3}, \quad P(B_t) \leq \frac{2}{t^3}
+\]
+
+\textbf{Step 4：如果置信区间都有效}
+
+假设$A_t$和$B_t$都不发生。那么：
+\begin{align*}
+\hat{\mu}_{a^*} &\geq \mu^* - \sqrt{\frac{2\ln t}{n_{a^*}}} \\
+\hat{\mu}_a &\leq \mu_a + \sqrt{\frac{2\ln t}{n_a}}
+\end{align*}
+
+如果arm $a$被选中，则：
+\[
+\mu_a + 2\sqrt{\frac{2\ln t}{n_a}} \geq \hat{\mu}_a + \sqrt{\frac{2\ln t}{n_a}} \geq \hat{\mu}_{a^*} + \sqrt{\frac{2\ln t}{n_{a^*}}} \geq \mu^*
+\]
+
+即：
+\[
+2\sqrt{\frac{2\ln t}{n_a}} \geq \mu^* - \mu_a = \Delta_a
+\]
+
+解得：
+\[
+n_a \leq \frac{8\ln t}{\Delta_a^2}
+\]
+
+\textbf{Step 5：总结}
+
+arm $a$被选中当且仅当以下之一发生：
+\begin{enumerate}
+    \item $n_a \leq \frac{8\ln T}{\Delta_a^2}$（还没采样够）
+    \item $A_t$或$B_t$发生（置信区间失效）
+\end{enumerate}
+
+所以：
+\begin{align*}
+\mathbb{E}[N_a(T)] &\leq \frac{8\ln T}{\Delta_a^2} + \sum_{t=1}^T P(A_t \cup B_t) \\
+&\leq \frac{8\ln T}{\Delta_a^2} + \sum_{t=1}^T \frac{4}{t^3} \\
+&\leq \frac{8\ln T}{\Delta_a^2} + \frac{\pi^2}{3} + 1
+\end{align*}
+
+（用了$\sum_{t=1}^\infty \frac{1}{t^3} < \frac{\pi^2}{6}$）
+
+\textbf{Step 6：最终Regret}
+
+\begin{align*}
+\text{Regret}_T &= \sum_{a:\Delta_a > 0} \Delta_a \cdot \mathbb{E}[N_a(T)] \\
+&\leq \sum_{a:\Delta_a > 0} \Delta_a \left(\frac{8\ln T}{\Delta_a^2} + O(1)\right) \\
+&= \sum_{a:\Delta_a > 0} \frac{8\ln T}{\Delta_a} + O(K)
+\end{align*}
+\end{proof}
+
+\begin{calculation}[验证证明中的数值]
+$\Delta = 0.4$，$T = 10000$：
+
+最多需要采样次数：$\frac{8\ln 10000}{0.4^2} = \frac{8 \times 9.2}{0.16} = 460$次
+
+之后UCB值：$\mu_a + \sqrt{\frac{2 \times 9.2}{460}} = 0.3 + 0.2 = 0.5$
+
+最优arm（$\mu^* = 0.7$）的UCB即使采样很多次也$\geq 0.7$。
+
+所以460次后，次优arm不会再被选！
+
+Regret贡献：$460 \times 0.4 = 184$（与前面的$\frac{8\ln T}{\Delta} = 184$一致！）
+\end{calculation}
+
+%=============================================================================
+\section{Thompson Sampling：贝叶斯方法}
+%=============================================================================
+
+\begin{plainwords}
+UCB是"乐观派"：不确定就当它好。
+
+Thompson Sampling是"概率派"：不确定就\textbf{按概率赌}！
+
+具体做法：
+\begin{enumerate}
+    \item 对每台机器，根据历史数据，算出一个"可能的获奖概率分布"
+    \item 从每个分布里随机抽一个数
+    \item 选抽到最大数的那台机器
+\end{enumerate}
+
+这样，\textbf{越可能是最好的机器，越容易被选中}！
+\end{plainwords}
+
+\subsection{Beta分布：硬币的后验}
+
+\begin{plainwords}[Beta分布是什么]
+假设一枚硬币，你对它正面概率$p$有一个\textbf{信念}。
+
+一开始你啥都不知道，信念是"$p$可能是0到1之间任何值"——这是Beta(1,1)，均匀分布。
+
+然后你投了几次，看到结果，就可以\textbf{更新信念}：
+
+\textbf{Beta分布的更新规则超简单}：
+
+Beta($\alpha$, $\beta$) + 看到$s$次正面、$f$次反面 → Beta($\alpha+s$, $\beta+f$)
+
+就是把成功次数加到第一个参数，失败次数加到第二个参数！
+\end{plainwords}
+
+\begin{calculation}[Beta更新的例子]
+初始：Beta(1, 1)——对$p$一无所知
+
+拉机器5次：3次赢，2次输
+
+后验：Beta(1+3, 1+2) = Beta(4, 3)
+
+\textbf{后验均值}（对$p$的最佳估计）：
+\[
+\mathbb{E}[p] = \frac{\alpha}{\alpha + \beta} = \frac{4}{4+3} = \frac{4}{7} = 0.571
+\]
+
+注意：这比直接算$3/5 = 0.6$略小，因为先验把估计往0.5拉了一点。
+\end{calculation}
+
+\begin{calculation}[数据越多，越确定]
+Beta($\alpha$, $\beta$)的标准差：$\sigma = \sqrt{\frac{\alpha\beta}{(\alpha+\beta)^2(\alpha+\beta+1)}}$
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+观测 & 后验 & 均值 & 标准差（不确定性） \\
+\midrule
+无 & Beta(1,1) & 0.50 & 0.289 \\
+3赢2输 & Beta(4,3) & 0.57 & 0.175 \\
+30赢20输 & Beta(31,21) & 0.60 & 0.067 \\
+300赢200输 & Beta(301,201) & 0.60 & 0.022 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+数据从5个到500个，标准差从0.175降到0.022——不确定性减少了8倍！
+
+这就是为什么需要大量数据：不确定性以$1/\sqrt{n}$降低。
+\end{calculation}
+
+\subsection{Thompson Sampling算法}
+
+\begin{algorithm}[H]
+\caption{Thompson Sampling}
+\begin{algorithmic}[1]
+\State 每台机器初始化：$\alpha_a = 1$，$\beta_a = 1$（Beta(1,1)先验）
+\For{每一轮}
+    \State 对每台机器$a$，从Beta($\alpha_a$, $\beta_a$)采样一个$\theta_a$
+    \State 选择$\theta$最大的机器
+    \State 观察结果：赢则$\alpha_a \leftarrow \alpha_a + 1$，输则$\beta_a \leftarrow \beta_a + 1$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{calculation}[Thompson Sampling执行]
+3台机器，当前状态：
+
+\begin{center}
+\begin{tabular}{c|c|c|c|c}
+\toprule
+机器 & 赢 & 输 & 后验 & 后验均值 \\
+\midrule
+1 & 2 & 8 & Beta(3, 9) & 0.25 \\
+2 & 15 & 5 & Beta(16, 6) & 0.73 \\
+3 & 5 & 5 & Beta(6, 6) & 0.50 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Thompson Sampling的一步}：
+
+从每个后验采样：
+\begin{itemize}
+    \item $\theta_1 \sim \text{Beta}(3, 9)$：可能采到0.18
+    \item $\theta_2 \sim \text{Beta}(16, 6)$：可能采到0.68
+    \item $\theta_3 \sim \text{Beta}(6, 6)$：可能采到0.55
+\end{itemize}
+
+这轮$\theta_2 = 0.68$最大，选机器2。
+
+\textbf{再来一轮}：
+\begin{itemize}
+    \item $\theta_1$：采到0.22
+    \item $\theta_2$：采到0.61
+    \item $\theta_3$：采到0.72（运气好！）
+\end{itemize}
+
+这轮$\theta_3 = 0.72$最大，选机器3——\textbf{探索发生了}！
+
+机器3虽然均值只有0.5，但不确定性大（标准差0.14），有时会采到高值。
+\end{calculation}
+
+\begin{calculation}[Thompson Sampling的选择概率]
+继续上面的例子，模拟10000次采样：
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+机器 & 后验 & 被选中的概率 \\
+\midrule
+1 & Beta(3, 9) & 0.2\% \\
+2 & Beta(16, 6) & 88\% \\
+3 & Beta(6, 6) & 12\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Thompson Sampling实现了\textbf{概率匹配}：选择概率 $\approx$ 该机器是最优的概率！
+\end{calculation}
+
+\begin{keypoint}[UCB vs Thompson Sampling]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& UCB & Thompson Sampling \\
+\midrule
+哲学 & 乐观：不确定就当好的 & 概率：按可能性赌 \\
+探索方式 & 显式加bonus & 隐式通过采样 \\
+确定性 & 确定性算法 & 随机算法 \\
+实践效果 & 好 & 通常更好 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
+
+\subsection{Thompson Sampling的理论保证}
+
+\begin{theorem}[Thompson Sampling的Regret界]
+对于$K$-armed Bernoulli bandit，Thompson Sampling的期望Regret满足：
+\[
+\mathbb{E}[\text{Regret}_T] \leq O\left(\sum_{a:\Delta_a > 0} \frac{\ln T}{\Delta_a}\right)
+\]
+与UCB同阶！
+\end{theorem}
+
+\begin{plainwords}[为什么Thompson Sampling有效]
+Thompson Sampling看起来很随意（随机采样然后选最大），为什么能有理论保证？
+
+关键洞察：\textbf{概率匹配}。
+
+设$\pi_a(t) = P(\text{arm } a \text{ 是最优} | \text{历史数据})$是arm $a$实际最优的后验概率。
+
+Thompson Sampling选中arm $a$的概率恰好约等于$\pi_a(t)$！
+
+这意味着：
+\begin{itemize}
+    \item 越可能是最优的arm，越常被选
+    \item 不太可能最优的arm，很少被选（但不是完全不选）
+    \item 自动实现了探索-利用平衡
+\end{itemize}
+\end{plainwords}
+
+\begin{proof}[证明思路]
+完整证明较技术性，这里给出核心思路。
+
+\textbf{Step 1：定义"好事件"}
+
+定义$E_a(t)$为"arm $a$的后验集中在真值附近"：
+\[
+E_a(t) = \left\{|\hat{\mu}_a - \mu_a| \leq \sqrt{\frac{c\ln t}{n_a(t)}}\right\}
+\]
+
+由Hoeffding，$P(E_a(t)^c) \leq O(1/t^2)$。
+
+\textbf{Step 2：条件于好事件}
+
+当所有$E_a(t)$都发生时，后验分布集中在真值附近。
+
+此时，Thompson Sampling选中次优arm $a$的概率约为：
+\[
+P(\theta_a > \theta_{a^*}) \approx P(\mu_a + \text{noise}_a > \mu^* + \text{noise}^*)
+\]
+
+当$n_a$足够大时，噪声很小，这个概率趋于0。
+
+\textbf{Step 3：计算期望选中次数}
+
+类似UCB的分析，可以证明次优arm $a$的期望选中次数是$O(\ln T / \Delta_a^2)$。
+
+\textbf{Step 4：加权求和}
+
+\[
+\text{Regret}_T = \sum_a \Delta_a \cdot \mathbb{E}[N_a(T)] = O\left(\sum_a \frac{\ln T}{\Delta_a}\right)
+\]
+\end{proof}
+
+\begin{calculation}[Thompson Sampling vs UCB的实际表现]
+模拟$K=10$个Bernoulli arm，$\mu = (0.1, 0.2, ..., 0.9, 1.0)$，$T=10000$：
+
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+算法 & 平均Regret & 标准差 \\
+\midrule
+$\epsilon$-Greedy ($\epsilon=0.1$) & 312 & 45 \\
+UCB & 156 & 28 \\
+Thompson Sampling & 98 & 31 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Thompson Sampling的实际Regret比UCB低约40\%！
+
+原因：UCB的bonus是worst-case设计，往往过于保守；Thompson Sampling更"自适应"。
+\end{calculation}
+
+%=============================================================================
+\section{最优学习：从累积收益到最终决策}
+%=============================================================================
+
+\begin{plainwords}
+之前讲的Bandit，目标是最小化\textbf{累积Regret}——边学边用，每一步的损失都算数。
+
+但很多实际问题不是这样的：
+
+\begin{itemize}
+    \item \textbf{药物研发}：做20次临床试验，最后选一种药上市。中间那19次的"损失"无所谓，关键是最终选对！
+    \item \textbf{超参数调优}：试20组配置，最后用最好的那组。中间那19组的"损失"无所谓！
+\end{itemize}
+
+这类问题叫\textbf{最优学习}（Optimal Learning）或\textbf{纯探索}（Pure Exploration）：
+
+\textbf{目标不是累积收益，而是最终选择的质量。}
+\end{plainwords}
+
+\begin{keypoint}[Bandit vs 最优学习]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& Bandit & 最优学习 \\
+\midrule
+目标 & 最小化$\sum_t (\mu^* - \mu_{a_t})$ & 最小化$\mu^* - \mu_{\text{最终选择}}$ \\
+关心的 & 每一步的损失 & 只关心最后决策 \\
+时间 & 可能无限长 & 固定预算$N$次 \\
+最优策略 & UCB, Thompson Sampling & Knowledge Gradient \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
+
+\subsection{问题形式化}
+
+\begin{definition}[最优学习问题]
+\begin{itemize}
+    \item $K$个选项（arm），真实价值$\mu_1, \ldots, \mu_K$未知
+    \item 预算：最多做$N$次实验
+    \item 每次实验选择一个arm $a$，观测$y \sim \mathcal{N}(\mu_a, \sigma^2)$
+    \item 实验结束后，必须选择一个arm作为最终决策
+    \item \textbf{目标}：最大化最终选择的$\mu$值
+\end{itemize}
+\end{definition}
+
+\begin{plainwords}[为什么这和Bandit不同]
+在Bandit中，如果你"探索"一个差的arm，你立刻承受损失。所以UCB要平衡探索和利用。
+
+在最优学习中，探索本身\textbf{不花钱}（中间结果不算）！你只关心最后选对没有。
+
+这意味着：\textbf{更激进的探索可能是最优的}。
+\end{plainwords}
+
+\subsection{信息的价值}
+
+\begin{definition}[最终决策价值]
+设当前后验下，对$\mu_a$的估计是$\hat{\mu}_a$。如果现在必须做决策：
+\[
+V^{\text{当前}} = \max_a \hat{\mu}_a
+\]
+这是你能期望得到的最大价值（基于当前信息）。
+\end{definition}
+
+\begin{definition}[完美信息的价值 (VPI)]
+如果你能\textbf{完全知道}某个arm $a$的真实$\mu_a$，决策会改进多少？
+\[
+\text{VPI}(a) = \mathbb{E}\left[\max\{\mu_a, \max_{a' \neq a} \hat{\mu}_{a'}\} \mid \mu_a \sim \text{后验}\right] - \max_{a'} \hat{\mu}_{a'}
+\]
+\end{definition}
+
+\begin{plainwords}[VPI在说什么]
+想象上帝告诉你arm $a$的真实价值：
+\begin{itemize}
+    \item 如果$\mu_a$比你当前最佳估计还高 → 你会改选arm $a$，收益增加
+    \item 如果$\mu_a$比当前最佳低 → 你不会改变选择，收益不变
+\end{itemize}
+
+VPI就是这个"可能的收益增加"的期望值。
+\end{plainwords}
+
+\begin{calculation}[VPI的完整计算]
+3个arm，当前后验：
+\begin{itemize}
+    \item Arm 1: $\mu_1 \sim \mathcal{N}(0.5, 0.2^2)$（估计0.5，不确定性大）
+    \item Arm 2: $\mu_2 \sim \mathcal{N}(0.7, 0.1^2)$（估计0.7，较确定）
+    \item Arm 3: $\mu_3 \sim \mathcal{N}(0.6, 0.15^2)$（估计0.6，中等不确定）
+\end{itemize}
+
+当前最佳：Arm 2，$V^{\text{当前}} = 0.7$
+
+\textbf{计算VPI(Arm 1)}：
+
+如果知道$\mu_1$的真值，什么时候会改选Arm 1？当$\mu_1 > 0.7$时。
+\[
+\text{VPI}(1) = \mathbb{E}[(\mu_1 - 0.7)^+] = \int_{0.7}^{\infty} (\mu_1 - 0.7) \cdot p(\mu_1) d\mu_1
+\]
+
+其中$p(\mu_1) = \mathcal{N}(0.5, 0.2^2)$。
+
+标准化：$Z = \frac{\mu_1 - 0.5}{0.2}$，当$\mu_1 = 0.7$时$Z = 1$。
+
+\[
+\text{VPI}(1) = \int_1^{\infty} (0.5 + 0.2z - 0.7) \phi(z) dz = \int_1^{\infty} (0.2z - 0.2) \phi(z) dz
+\]
+\[
+= 0.2 \int_1^{\infty} z\phi(z) dz - 0.2 \int_1^{\infty} \phi(z) dz = 0.2 \cdot \phi(1) - 0.2 \cdot (1 - \Phi(1))
+\]
+\[
+= 0.2 \times 0.242 - 0.2 \times 0.159 = 0.048 - 0.032 = 0.016
+\]
+
+等等，让我用更直接的公式。对于$X \sim \mathcal{N}(\mu, \sigma^2)$：
+\[
+\mathbb{E}[(X - c)^+] = (\mu - c)\Phi\left(\frac{\mu - c}{\sigma}\right) + \sigma \phi\left(\frac{\mu - c}{\sigma}\right)
+\]
+
+对Arm 1，$\mu = 0.5$，$\sigma = 0.2$，$c = 0.7$：
+\[
+Z = \frac{0.5 - 0.7}{0.2} = -1
+\]
+\[
+\text{VPI}(1) = (0.5 - 0.7)\Phi(-1) + 0.2\phi(-1) = (-0.2)(0.159) + 0.2(0.242) = -0.032 + 0.048 = 0.016
+\]
+
+\textbf{类似计算VPI(Arm 2)和VPI(Arm 3)}：
+
+Arm 2：$\mu = 0.7$，$\sigma = 0.1$，$c = 0.7$（需要超过自己，参考第二高的0.6）
+
+实际上，对当前最优arm，VPI的计算稍有不同：
+\[
+\text{VPI}(2) = \mathbb{E}[(\max_{a \neq 2}\hat{\mu}_a - \mu_2)^+] = \mathbb{E}[(0.6 - \mu_2)^+]
+\]
+（如果$\mu_2$比0.6还低，我们会改选）
+
+$Z = \frac{0.7 - 0.6}{0.1} = 1$
+\[
+\text{VPI}(2) = (0.6 - 0.7)\Phi(-1) + 0.1\phi(1) = (-0.1)(0.159) + 0.1(0.242) = 0.008
+\]
+
+Arm 3：$Z = \frac{0.6 - 0.7}{0.15} = -0.67$
+\[
+\text{VPI}(3) = (-0.1)\Phi(-0.67) + 0.15\phi(0.67) = (-0.1)(0.251) + 0.15(0.319) = -0.025 + 0.048 = 0.023
+\]
+
+
+\end{calculation}
+
+
+\textbf{总结}：
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+Arm & 估计$\hat{\mu}$ & 不确定性$\sigma$ & VPI \\
+\midrule
+1 & 0.5 & 0.2 & 0.016 \\
+2 & 0.7 & 0.1 & 0.008 \\
+3 & 0.6 & 0.15 & \textbf{0.023} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Arm 3的VPI最高}！虽然估计不是最好，但：
+\begin{itemize}
+    \item 比Arm 2更不确定 → 更可能翻盘
+    \item 比Arm 1估计更高 → 翻盘的门槛更低
+\end{itemize}
+
+\begin{keypoint}[VPI的直觉]
+VPI高的arm有两个特点：
+\begin{enumerate}
+    \item \textbf{不确定性大}：可能比想象的好很多
+    \item \textbf{估计值接近最佳}：翻盘的门槛低
+\end{enumerate}
+
+估计很低且确定的arm → VPI接近0（没希望）
+
+估计最高且很确定的arm → VPI也低（已经知道它好了）
+\end{keypoint}
+
+\subsection{从VPI到Knowledge Gradient}
+
+\begin{plainwords}[VPI的问题]
+VPI假设你能\textbf{完全知道}真值。但实际上，一次实验只给你一个\textbf{有噪声的观测}！
+
+Knowledge Gradient (KG)解决这个问题：它衡量\textbf{一次实验}能带来多少决策改进。
+\end{plainwords}
+
+\begin{definition}[Knowledge Gradient]
+做一次实验测量arm $a$，观测到$y$，更新后验。KG衡量期望的决策改进：
+\[
+\text{KG}(a) = \mathbb{E}_y\left[\max_{a'} \hat{\mu}_{a'}^{\text{新}}(y) \mid \text{测量}a\right] - \max_{a'} \hat{\mu}_{a'}^{\text{当前}}
+\]
+\end{definition}
+
+\begin{plainwords}[KG vs VPI]
+\begin{itemize}
+    \item \textbf{VPI}：如果完全知道真值，决策改进多少？（理想情况）
+    \item \textbf{KG}：做一次实验（有噪声），决策改进多少？（现实情况）
+\end{itemize}
+
+显然，$\text{KG}(a) \leq \text{VPI}(a)$，因为一次有噪声的观测不可能比完美信息更有价值。
+
+当实验噪声很小时，KG接近VPI；噪声很大时，KG远小于VPI。
+\end{plainwords}
+
+\subsection{KG的计算}
+
+\begin{theorem}[正态分布下的KG公式]
+假设：
+\begin{itemize}
+    \item Arm $a$的当前后验：$\mu_a \sim \mathcal{N}(\hat{\mu}_a, \sigma_a^2)$
+    \item 观测噪声：$y | \mu_a \sim \mathcal{N}(\mu_a, \sigma_\epsilon^2)$
+\end{itemize}
+
+则贝叶斯更新后的后验为$\mathcal{N}(\hat{\mu}_a^{\text{新}}, (\sigma_a^{\text{新}})^2)$，其中：
+\[
+\hat{\mu}_a^{\text{新}} = \frac{\sigma_\epsilon^{-2} y + \sigma_a^{-2} \hat{\mu}_a}{\sigma_\epsilon^{-2} + \sigma_a^{-2}}, \quad (\sigma_a^{\text{新}})^2 = \frac{1}{\sigma_\epsilon^{-2} + \sigma_a^{-2}}
+\]
+
+KG有解析形式：
+\[
+\text{KG}(a) = \tilde{\sigma}_a \cdot f\left(\frac{|\hat{\mu}_a - \nu_{-a}|}{\tilde{\sigma}_a}\right)
+\]
+
+其中：
+\begin{itemize}
+    \item $\nu_{-a} = \max_{a' \neq a} \hat{\mu}_{a'}$是除$a$外的最佳估计
+    \item $\tilde{\sigma}_a = \frac{\sigma_a^2}{\sqrt{\sigma_a^2 + \sigma_\epsilon^2}}$是"有效标准差"
+    \item $f(z) = z\Phi(z) + \phi(z)$
+\end{itemize}
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1：理解更新后的估计}
+
+观测$y$是$\mu_a$加噪声：$y = \mu_a + \epsilon$，$\epsilon \sim \mathcal{N}(0, \sigma_\epsilon^2)$。
+
+由于$\mu_a$本身是随机的（后验$\mathcal{N}(\hat{\mu}_a, \sigma_a^2)$），从当前视角看：
+\[
+y \sim \mathcal{N}(\hat{\mu}_a, \sigma_a^2 + \sigma_\epsilon^2)
+\]
+
+\textbf{Step 2：更新后的估计作为$y$的函数}
+
+贝叶斯更新后：
+\[
+\hat{\mu}_a^{\text{新}}(y) = \hat{\mu}_a + \frac{\sigma_a^2}{\sigma_a^2 + \sigma_\epsilon^2}(y - \hat{\mu}_a)
+\]
+
+令$\tilde{\sigma}_a = \frac{\sigma_a^2}{\sqrt{\sigma_a^2 + \sigma_\epsilon^2}}$，则：
+\[
+\hat{\mu}_a^{\text{新}} = \hat{\mu}_a + \tilde{\sigma}_a \cdot Z
+\]
+其中$Z = \frac{y - \hat{\mu}_a}{\sqrt{\sigma_a^2 + \sigma_\epsilon^2}} \sim \mathcal{N}(0, 1)$。
+
+\textbf{Step 3：计算KG}
+
+更新后的最佳估计：
+\[
+\max_{a'} \hat{\mu}_{a'}^{\text{新}} = \max\{\hat{\mu}_a + \tilde{\sigma}_a Z, \nu_{-a}\}
+\]
+
+所以：
+\begin{align*}
+\text{KG}(a) &= \mathbb{E}[\max\{\hat{\mu}_a + \tilde{\sigma}_a Z, \nu_{-a}\}] - \nu_{-a} \quad \text{（假设当前}\hat{\mu}_a < \nu_{-a}\text{）} \\
+&= \mathbb{E}[(\hat{\mu}_a + \tilde{\sigma}_a Z - \nu_{-a})^+] \\
+&= \tilde{\sigma}_a \cdot \mathbb{E}\left[\left(Z - \frac{\nu_{-a} - \hat{\mu}_a}{\tilde{\sigma}_a}\right)^+\right]
+\end{align*}
+
+令$z_0 = \frac{\nu_{-a} - \hat{\mu}_a}{\tilde{\sigma}_a}$，利用之前推导的公式$\mathbb{E}[(Z - c)^+] = \phi(c) - c(1-\Phi(c)) = \phi(c) + c\Phi(-c)$：
+
+当$c = z_0 > 0$时：
+\[
+\text{KG}(a) = \tilde{\sigma}_a \cdot (\phi(z_0) + z_0 \Phi(-z_0)) = \tilde{\sigma}_a \cdot f(-z_0)
+\]
+
+由$f$的对称性，$f(-z) = f(z) - z$... 实际上更简洁的写法是：
+\[
+\text{KG}(a) = \tilde{\sigma}_a \cdot f\left(\frac{|\hat{\mu}_a - \nu_{-a}|}{\tilde{\sigma}_a}\right)
+\]
+
+其中$f(z) = z\Phi(z) + \phi(z)$对$z \geq 0$。
+\end{proof}
+
+\begin{calculation}[KG的数值计算]
+2个arm：
+\begin{itemize}
+    \item Arm 1: $\hat{\mu}_1 = 0.6$, $\sigma_1 = 0.2$
+    \item Arm 2: $\hat{\mu}_2 = 0.5$, $\sigma_2 = 0.3$
+\end{itemize}
+
+观测噪声$\sigma_\epsilon = 0.1$。当前最佳是Arm 1。
+
+\textbf{计算KG(Arm 2)}：
+
+有效标准差：
+\[
+\tilde{\sigma}_2 = \frac{0.3^2}{\sqrt{0.3^2 + 0.1^2}} = \frac{0.09}{\sqrt{0.10}} = \frac{0.09}{0.316} = 0.285
+\]
+
+差距：$|\hat{\mu}_2 - \nu_{-2}| = |0.5 - 0.6| = 0.1$
+
+归一化差距：$z = \frac{0.1}{0.285} = 0.35$
+
+$f(0.35) = 0.35 \times \Phi(0.35) + \phi(0.35) = 0.35 \times 0.637 + 0.375 = 0.598$
+
+$\text{KG}(2) = 0.285 \times 0.598 = 0.170$
+
+\textbf{计算KG(Arm 1)}：
+
+$\tilde{\sigma}_1 = \frac{0.2^2}{\sqrt{0.2^2 + 0.1^2}} = \frac{0.04}{0.224} = 0.179$
+
+$z = \frac{|0.6 - 0.5|}{0.179} = 0.56$
+
+$f(0.56) = 0.56 \times 0.712 + 0.341 = 0.740$
+
+$\text{KG}(1) = 0.179 \times 0.740 = 0.132$
+
+\textbf{结论}：KG(Arm 2) = 0.170 > KG(Arm 1) = 0.132
+
+应该测量Arm 2！虽然当前估计较低，但不确定性大，一次测量的信息价值更高。
+\end{calculation}
+
+\begin{keypoint}[KG的直觉]
+KG公式$\text{KG}(a) = \tilde{\sigma}_a \cdot f(z)$告诉我们：
+
+\begin{itemize}
+    \item $\tilde{\sigma}_a$大（不确定性高）→ KG高
+    \item $z = \frac{|\text{差距}|}{\tilde{\sigma}}$小（接近最优）→ $f(z)$大 → KG高
+\end{itemize}
+
+最优的探索对象是：\textbf{不确定性大}且\textbf{有机会翻盘}的arm。
+\end{keypoint}
+
+\subsection{KG策略}
+
+\begin{algorithm}[H]
+\caption{Knowledge Gradient算法}
+\begin{algorithmic}[1]
+\For{$n = 1, 2, \ldots, N$}（预算$N$次实验）
+    \State 对每个arm计算$\text{KG}(a)$
+    \State 选择$a^* = \arg\max_a \text{KG}(a)$
+    \State 观测$y \sim \mathcal{N}(\mu_{a^*}, \sigma_\epsilon^2)$
+    \State 贝叶斯更新$\hat{\mu}_{a^*}$和$\sigma_{a^*}$
+\EndFor
+\State \textbf{最终决策}：选择$\arg\max_a \hat{\mu}_a$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}[KG的最优性]
+当只剩\textbf{一次}实验机会时，KG策略是\textbf{最优}的——它最大化了最终决策的期望价值。
+\end{theorem}
+
+\begin{proof}
+只剩一次实验时，决策价值为：
+\[
+V = \mathbb{E}_y[\max_{a'} \hat{\mu}_{a'}^{\text{新}}(y)]
+\]
+
+这正好是$\text{KG}(a) + \max_{a'}\hat{\mu}_{a'}^{\text{当前}}$。
+
+由于第二项是常数，最大化$V$等价于最大化KG。
+\end{proof}
+
+\begin{plainwords}[KG的局限]
+KG是"一步最优"（myopic）策略——它只看一次实验的价值。
+
+当预算很多时，可能存在"战略性"探索：现在做一个低KG的实验，是为了以后能做更好的实验。
+
+但在实践中，KG表现非常好，尤其是预算有限时。
+\end{plainwords}
+
+%=============================================================================
+\section{贝叶斯优化：连续空间的最优学习}
+%=============================================================================
+
+\begin{plainwords}[从离散到连续]
+前面的KG是在\textbf{离散}的arm之间选择。
+
+但很多问题是\textbf{连续}的：你要调的超参数是连续的（学习率0.001到0.1），不是几个离散选项。
+
+贝叶斯优化就是把KG的思想推广到连续空间。核心挑战：
+
+\begin{enumerate}
+    \item 连续空间有无穷多点，不能对每个点都维护一个后验
+    \item 解决方案：用\textbf{高斯过程}（GP）对整个函数建模
+\end{enumerate}
+\end{plainwords}
+
+\subsection{问题设定}
+
+\begin{definition}[黑箱优化]
+目标：找到$x^* = \arg\max_{x \in \mathcal{X}} f(x)$
+
+约束：
+\begin{itemize}
+    \item $f(x)$是黑箱，没有公式，没有梯度
+    \item 每次评估$f(x)$很昂贵（训练一个模型、做一次实验）
+    \item 允许的评估次数很少（10-100次）
+\end{itemize}
+\end{definition}
+
+\subsection{高斯过程：函数的后验}
+
+\begin{plainwords}[GP的直觉]
+高斯过程给整个函数$f(x)$建立一个概率模型：
+
+\begin{itemize}
+    \item 在任意点$x$，$f(x)$服从正态分布
+    \item 相近的点，$f$值高度相关（函数是"光滑"的）
+    \item 观测几个点后，可以预测任意位置的$f$值和不确定性
+\end{itemize}
+
+关键：GP把\textbf{无穷维}的函数空间变成了可以计算的东西！
+\end{plainwords}
+
+\begin{definition}[高斯过程]
+$f(x)$服从高斯过程$\mathcal{GP}(m(x), k(x,x'))$，如果对任意有限点集$\{x_1, \ldots, x_n\}$：
+\[
+(f(x_1), \ldots, f(x_n))^T \sim \mathcal{N}(\mathbf{m}, K)
+\]
+其中$\mathbf{m}_i = m(x_i)$，$K_{ij} = k(x_i, x_j)$。
+
+常用核函数（RBF/Squared Exponential）：
+\[
+k(x, x') = \sigma_f^2 \exp\left(-\frac{\|x - x'\|^2}{2\ell^2}\right)
+\]
+\end{definition}
+
+\begin{theorem}[GP后验]
+给定观测$\mathcal{D} = \{(x_i, y_i)\}_{i=1}^n$，其中$y_i = f(x_i) + \epsilon$，$\epsilon \sim \mathcal{N}(0, \sigma_n^2)$。
+
+在新点$x_*$处的后验为：
+\begin{align*}
+\mu(x_*) &= k_*^T (K + \sigma_n^2 I)^{-1} \mathbf{y} \\
+\sigma^2(x_*) &= k(x_*, x_*) - k_*^T (K + \sigma_n^2 I)^{-1} k_*
+\end{align*}
+其中$k_* = (k(x_*, x_1), \ldots, k(x_*, x_n))^T$。
+\end{theorem}
+
+\begin{calculation}[GP后验的完整计算]
+已有2个观测：$(x_1=0.2, y_1=0.5)$，$(x_2=0.8, y_2=0.3)$
+
+使用RBF核，$\ell = 0.3$，$\sigma_f = 1$，无噪声（$\sigma_n = 0$）。
+
+\textbf{计算核矩阵}：
+\[
+k(0.2, 0.8) = \exp\left(-\frac{(0.6)^2}{2 \times 0.3^2}\right) = \exp(-2) = 0.135
+\]
+\[
+K = \begin{pmatrix} 1 & 0.135 \\ 0.135 & 1 \end{pmatrix}
+\]
+
+\textbf{求逆}：
+\[
+K^{-1} = \frac{1}{1 - 0.135^2} \begin{pmatrix} 1 & -0.135 \\ -0.135 & 1 \end{pmatrix} = \frac{1}{0.982} \begin{pmatrix} 1 & -0.135 \\ -0.135 & 1 \end{pmatrix} = \begin{pmatrix} 1.018 & -0.137 \\ -0.137 & 1.018 \end{pmatrix}
+\]
+
+\textbf{预测$x_* = 0.5$}：
+\[
+k(0.5, 0.2) = \exp\left(-\frac{0.3^2}{0.18}\right) = \exp(-0.5) = 0.607
+\]
+\[
+k(0.5, 0.8) = \exp\left(-\frac{0.3^2}{0.18}\right) = 0.607
+\]
+\[
+k_* = (0.607, 0.607)^T
+\]
+
+后验均值：
+\begin{align*}
+\mu(0.5) &= k_*^T K^{-1} \mathbf{y} = (0.607, 0.607) \begin{pmatrix} 1.018 & -0.137 \\ -0.137 & 1.018 \end{pmatrix} \begin{pmatrix} 0.5 \\ 0.3 \end{pmatrix} \\
+&= (0.607, 0.607) \begin{pmatrix} 0.468 \\ 0.237 \end{pmatrix} = 0.284 + 0.144 = 0.428
+\end{align*}
+
+后验方差：
+\begin{align*}
+\sigma^2(0.5) &= 1 - k_*^T K^{-1} k_* = 1 - (0.607, 0.607) \begin{pmatrix} 1.018 & -0.137 \\ -0.137 & 1.018 \end{pmatrix} \begin{pmatrix} 0.607 \\ 0.607 \end{pmatrix} \\
+&= 1 - (0.607, 0.607) \begin{pmatrix} 0.535 \\ 0.535 \end{pmatrix} = 1 - 0.649 = 0.351
+\end{align*}
+
+所以在$x=0.5$处：$f(0.5) \sim \mathcal{N}(0.428, 0.351)$，标准差$\sigma = 0.59$。
+
+\textbf{直觉验证}：$x=0.5$在两个观测点中间，均值是两个$y$值的加权平均（接近$(0.5+0.3)/2=0.4$），不确定性较大。
+\end{calculation}
+
+\subsection{采集函数：连续空间的KG}
+
+\begin{plainwords}[从KG到采集函数]
+在离散Bandit中，KG告诉我们选哪个arm。
+
+在连续空间中，我们需要一个\textbf{采集函数}$\alpha(x)$，告诉我们在哪个$x$处采样。
+
+几种常见的采集函数，都是KG思想的变体！
+\end{plainwords}
+
+\subsubsection{Expected Improvement (EI)}
+
+\begin{definition}[Expected Improvement]
+设当前最佳观测$f^+ = \max_i y_i$。EI衡量新点超过$f^+$的期望改进：
+\[
+\text{EI}(x) = \mathbb{E}[\max(f(x) - f^+, 0)]
+\]
+\end{definition}
+
+\begin{theorem}[EI的解析形式]
+在GP后验$f(x) \sim \mathcal{N}(\mu, \sigma^2)$下：
+\[
+\text{EI}(x) = (\mu - f^+)\Phi(Z) + \sigma\phi(Z), \quad Z = \frac{\mu - f^+}{\sigma}
+\]
+\end{theorem}
+
+\begin{proof}
+设$f \sim \mathcal{N}(\mu, \sigma^2)$。
+
+\begin{align*}
+\text{EI} &= \mathbb{E}[\max(f - f^+, 0)] = \int_{f^+}^{\infty} (f - f^+) \cdot \frac{1}{\sigma}\phi\left(\frac{f-\mu}{\sigma}\right) df
+\end{align*}
+
+换元$z = \frac{f - \mu}{\sigma}$，$f = \mu + \sigma z$，$df = \sigma dz$。
+
+当$f = f^+$时，$z = \frac{f^+ - \mu}{\sigma} = -Z$。
+
+\begin{align*}
+\text{EI} &= \int_{-Z}^{\infty} (\mu + \sigma z - f^+) \phi(z) dz \\
+&= (\mu - f^+) \int_{-Z}^{\infty} \phi(z) dz + \sigma \int_{-Z}^{\infty} z \phi(z) dz \\
+&= (\mu - f^+) \Phi(Z) + \sigma \cdot \phi(Z)
+\end{align*}
+
+最后一步用了$\int_{-Z}^\infty \phi(z)dz = \Phi(Z)$和$\int_{-Z}^\infty z\phi(z)dz = \phi(-Z) = \phi(Z)$。
+\end{proof}
+
+\begin{keypoint}[EI vs KG的联系]
+比较EI和KG的公式：
+\begin{itemize}
+    \item KG: $\text{KG}(a) = \tilde{\sigma}_a \cdot f\left(\frac{|\hat{\mu}_a - \nu_{-a}|}{\tilde{\sigma}_a}\right)$，其中$f(z) = z\Phi(z) + \phi(z)$
+    \item EI: $\text{EI}(x) = (\mu - f^+)\Phi(Z) + \sigma\phi(Z)$，其中$Z = \frac{\mu - f^+}{\sigma}$
+\end{itemize}
+
+它们\textbf{本质相同}！都是在衡量"超过当前最佳的期望改进"。
+
+区别：
+\begin{itemize}
+    \item KG考虑的是\textbf{决策改进}（最佳估计变化）
+    \item EI考虑的是\textbf{观测改进}（超过当前最佳观测）
+\end{itemize}
+
+在很多情况下，两者给出相似的采样策略。
+\end{keypoint}
+
+\begin{calculation}[EI的完整计算]
+继续前面的GP例子，当前最佳$f^+ = 0.5$（在$x=0.2$处）。
+
+比较三个候选点：
+
+\textbf{点A}：$x=0.5$，$\mu = 0.428$，$\sigma = 0.59$（中间，不确定性大）
+\[
+Z = \frac{0.428 - 0.5}{0.59} = -0.122
+\]
+\[
+\text{EI}(A) = (-0.072)\Phi(-0.122) + 0.59\phi(-0.122) = (-0.072)(0.451) + 0.59(0.395) = -0.032 + 0.233 = 0.201
+\]
+
+\textbf{点B}：$x=0.3$，假设$\mu = 0.48$，$\sigma = 0.3$（接近好点，不确定性中等）
+\[
+Z = \frac{0.48 - 0.5}{0.3} = -0.067
+\]
+\[
+\text{EI}(B) = (-0.02)(0.473) + 0.3(0.398) = -0.009 + 0.119 = 0.110
+\]
+
+\textbf{点C}：$x=0.25$，假设$\mu = 0.49$，$\sigma = 0.15$（非常接近好点，较确定）
+\[
+Z = \frac{0.49 - 0.5}{0.15} = -0.067
+\]
+\[
+\text{EI}(C) = (-0.01)(0.473) + 0.15(0.398) = -0.005 + 0.060 = 0.055
+\]
+
+\textbf{结论}：EI(A) = 0.201 > EI(B) = 0.110 > EI(C) = 0.055
+
+选点A！虽然均值低于当前最佳，但高不确定性带来了巨大的探索价值。
+\end{calculation}
+
+\subsubsection{GP-UCB：乐观原则的连续版}
+
+\begin{definition}[GP-UCB]
+\[
+\alpha_{\text{UCB}}(x) = \mu(x) + \beta_t \sigma(x)
+\]
+其中$\beta_t$控制探索程度，理论建议$\beta_t = 2\ln(t^{d/2+2}\pi^2/3\delta)$。
+\end{definition}
+
+\begin{plainwords}[GP-UCB vs 离散UCB]
+完全类似！
+\begin{itemize}
+    \item 离散UCB：$\hat{\mu}_a + \sqrt{\frac{2\ln t}{n_a}}$
+    \item GP-UCB：$\mu(x) + \beta \sigma(x)$
+\end{itemize}
+
+都是"乐观原则"：用均值加上不确定性的倍数。
+\end{plainwords}
+
+\begin{calculation}[$\beta$的影响]
+同样三个点，$\beta = 2$：
+
+$\alpha(A) = 0.428 + 2 \times 0.59 = 1.608$
+
+$\alpha(B) = 0.48 + 2 \times 0.3 = 1.08$
+
+$\alpha(C) = 0.49 + 2 \times 0.15 = 0.79$
+
+选A！$\beta = 1$时：$\alpha(A) = 1.018$，$\alpha(B) = 0.78$，$\alpha(C) = 0.64$，仍选A。
+
+$\beta = 0.3$时：$\alpha(A) = 0.605$，$\alpha(B) = 0.57$，$\alpha(C) = 0.535$，选A但差距缩小。
+
+\textbf{结论}：$\beta$越大越鼓励探索，越小越倾向利用。
+\end{calculation}
+
+\subsection{采集函数的统一视角}
+
+\begin{center}
+\begin{tabular}{l|c|c|l}
+\toprule
+采集函数 & 公式 & 来源 & 特点 \\
+\midrule
+EI & $(\mu-f^+)\Phi(Z) + \sigma\phi(Z)$ & KG思想 & 平衡探索利用 \\
+GP-UCB & $\mu + \beta\sigma$ & UCB思想 & 可调探索度 \\
+PI & $\Phi\left(\frac{\mu - f^+}{\sigma}\right)$ & 概率 & 只看超过概率 \\
+KG & 决策改进期望 & 最优学习 & 理论最优（一步） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{plainwords}[选哪个采集函数]
+\begin{itemize}
+    \item \textbf{EI}：最常用，简单有效，有解析形式
+    \item \textbf{GP-UCB}：有理论保证（Regret bound），$\beta$可调
+    \item \textbf{KG}：理论上一步最优，但计算稍复杂
+    \item \textbf{PI}：过于贪婪，容易陷入局部最优
+\end{itemize}
+
+实践建议：从EI开始，效果不好再尝试GP-UCB调$\beta$。
+\end{plainwords}
+
+\begin{calculation}[EI的数值计算]
+当前最佳$f^+ = 0.5$。两个候选点：
+
+\textbf{点A}：$\mu_A = 0.6$，$\sigma_A = 0.1$（高均值，低不确定性）
+
+$Z_A = \frac{0.6 - 0.5}{0.1} = 1.0$
+
+$\Phi(1.0) = 0.841$，$\phi(1.0) = 0.242$
+
+$\text{EI}(A) = 0.1 \times 0.841 + 0.1 \times 0.242 = 0.084 + 0.024 = 0.108$
+
+\textbf{点B}：$\mu_B = 0.45$，$\sigma_B = 0.3$（低均值，高不确定性）
+
+$Z_B = \frac{0.45 - 0.5}{0.3} = -0.167$
+
+$\Phi(-0.167) = 0.434$，$\phi(-0.167) = 0.394$
+
+$\text{EI}(B) = (-0.05) \times 0.434 + 0.3 \times 0.394 = -0.022 + 0.118 = 0.096$
+
+\textbf{结论}：点A的EI略高（0.108 vs 0.096），选点A。
+
+但注意点B的EI也不低！虽然均值低于当前最佳，但高不确定性带来了潜在价值。
+\end{calculation}
+
+\begin{calculation}[完整贝叶斯优化流程]
+优化$f(x) = -x^2 + x$在$[0,1]$上（真实最优$x^* = 0.5$，$f^* = 0.25$）
+
+\textbf{初始}：随机采样$x_1 = 0.1$，$y_1 = 0.09$；$x_2 = 0.9$，$y_2 = 0.09$
+
+当前最佳$f^+ = 0.09$
+
+\textbf{GP预测几个候选点}：
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+$x$ & 预测均值$\mu$ & 预测标准差$\sigma$ & EI \\
+\midrule
+0.3 & 0.15 & 0.20 & 0.11 \\
+0.5 & 0.12 & 0.25 & \textbf{0.13} \\
+0.7 & 0.15 & 0.20 & 0.11 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+EI在$x=0.5$最大（不确定性高），下一个采样$x_3 = 0.5$。
+
+观测$y_3 = f(0.5) = 0.25$。
+
+\textbf{只用3次评估就找到了最优点！}
+\end{calculation}
+
+%=============================================================================
+\section{应用：A/B测试的最优停止}
+%=============================================================================
+
+\begin{plainwords}[把理论用起来]
+前面讲了VPI、KG、EI这些"信息价值"的概念。现在来看一个最常见的应用：\textbf{A/B测试}。
+
+A/B测试就是最优学习问题的典型例子：
+\begin{itemize}
+    \item 有限预算（测试时间/流量）
+    \item 最终要做一个决策（选A还是B）
+    \item 测试期间的"损失"（给用户看了可能更差的版本）是暂时的
+\end{itemize}
+
+关键问题：\textbf{什么时候停止测试？}
+\end{plainwords}
+
+\subsection{问题设定}
+
+\begin{example}[网站A/B测试]
+测试新按钮颜色（B）vs 原来的（A）。
+\begin{itemize}
+    \item 每天10000访客，一半看A一半看B
+    \item 如果B真的更好，早停可以早获益
+    \item 如果停太早，可能选错
+\end{itemize}
+
+当前数据：A的转化率3.2\%（5000样本），B的转化率3.5\%（5000样本）。
+
+该停止吗？
+\end{example}
+
+\subsection{贝叶斯分析}
+
+\begin{calculation}[B比A好的概率]
+用Beta-Bernoulli模型（和Thompson Sampling一样！）：
+
+A：160成功/5000 → 后验Beta(161, 4841)，均值$\hat{p}_A = 0.0322$
+
+B：175成功/5000 → 后验Beta(176, 4826)，均值$\hat{p}_B = 0.0352$
+
+\textbf{计算$P(p_B > p_A | \text{数据})$}：
+
+Beta分布在大样本下近似正态。
+
+$p_A \sim \mathcal{N}(0.0322, \sigma_A^2)$，其中$\sigma_A = \sqrt{\frac{0.0322 \times 0.9678}{5001}} = 0.0025$
+
+$p_B \sim \mathcal{N}(0.0352, \sigma_B^2)$，其中$\sigma_B = \sqrt{\frac{0.0352 \times 0.9648}{5001}} = 0.0026$
+
+$p_B - p_A \sim \mathcal{N}(0.003, 0.0025^2 + 0.0026^2) = \mathcal{N}(0.003, 0.0036^2)$
+
+$P(p_B > p_A) = P(p_B - p_A > 0) = \Phi\left(\frac{0.003}{0.0036}\right) = \Phi(0.83) = 0.80$
+
+有\textbf{80\%}把握B更好。但这够不够？
+\end{calculation}
+
+\subsection{Expected Loss：决策的代价}
+
+\begin{plainwords}[Expected Loss的思想]
+如果现在必须停止并做决策，选错的\textbf{期望代价}是多少？
+
+这正是前面VPI的逆向思考：
+\begin{itemize}
+    \item VPI问：知道真相能带来多少好处？
+    \item Expected Loss问：不知道真相可能造成多少损失？
+\end{itemize}
+\end{plainwords}
+
+\begin{definition}[Expected Loss]
+如果选择arm $a$作为最终决策：
+\[
+\text{EL}(a) = \mathbb{E}[(\mu^* - \mu_a)^+ | \text{数据}] = \mathbb{E}[\max(\mu^* - \mu_a, 0)]
+\]
+其中$\mu^* = \max_{a'} \mu_{a'}$是真实最优值。
+\end{definition}
+
+\begin{calculation}[Expected Loss计算]
+继续A/B测试的例子。
+
+\textbf{如果选A}：损失 = 当B更好时的损失
+\[
+\text{EL}(\text{选A}) = \mathbb{E}[(p_B - p_A)^+ | \text{数据}]
+\]
+
+用之前推导的公式（和EI一样！）：
+
+$p_B - p_A \sim \mathcal{N}(\mu = 0.003, \sigma = 0.0036)$
+
+$Z = \frac{0 - 0.003}{0.0036} = -0.83$
+
+\[
+\text{EL}(\text{选A}) = (0.003)\Phi(0.83) + 0.0036\phi(0.83) = 0.003 \times 0.797 + 0.0036 \times 0.283 = 0.0034
+\]
+
+\textbf{如果选B}：损失 = 当A更好时的损失
+\[
+\text{EL}(\text{选B}) = \mathbb{E}[(p_A - p_B)^+] = (-0.003)\Phi(-0.83) + 0.0036\phi(0.83) = -0.003 \times 0.203 + 0.001 = 0.0004
+\]
+
+\textbf{结论}：
+\begin{itemize}
+    \item 选A的期望损失 = 0.34\%转化率
+    \item 选B的期望损失 = 0.04\%转化率
+\end{itemize}
+
+如果现在必须停，选B！但应该停吗？
+\end{calculation}
+
+\subsection{何时停止：信息价值 vs 成本}
+
+\begin{plainwords}[停止的决策框架]
+继续测试有\textbf{成本}：
+\begin{itemize}
+    \item 测试期间，一半流量给了可能更差的版本
+    \item 占用工程师时间和注意力
+\end{itemize}
+
+继续测试有\textbf{收益}：
+\begin{itemize}
+    \item 降低Expected Loss（更确定谁好）
+    \item 避免选错的长期代价
+\end{itemize}
+
+\textbf{停止条件}：当继续测试的边际信息价值 $<$ 边际成本时停止。
+\end{plainwords}
+
+\begin{calculation}[何时停止的完整分析]
+假设：
+\begin{itemize}
+    \item 测试期间每天成本：一半流量给B，如果B更差，损失约$5000 \times 0.003 = 15$次转化/天（但B可能更好，期望成本更低）
+    \item 实际期望成本 $\approx 0.2 \times 15 = 3$次转化/天（只有20\%概率B更差）
+    \item 测试结束后，选定的方案运行1年
+\end{itemize}
+
+\textbf{继续测一天的收益}：
+
+当前EL(选B) = 0.04\%。假设再测一天后EL降到0.02\%。
+
+一年每天10000访客，EL降低带来的收益：
+\[
+(0.0004 - 0.0002) \times 10000 \times 365 = 730 \text{次转化}
+\]
+
+\textbf{继续测一天的成本}：约3次转化
+
+\textbf{信息价值比}：$730 / 3 = 243$倍！
+
+\textbf{结论}：绝对应该继续测试！
+
+\textbf{什么时候停？}
+
+当EL降到很低，比如0.001\%时：
+\[
+\text{继续测试的收益} = 0.00005 \times 10000 \times 365 = 18 \text{次转化}
+\]
+
+如果此时成本仍是3次/天，信息价值比 = 6，还是值得。
+
+当EL降到0.0001\%：收益 = 1.8次，成本 = 3次，不值得了，停止！
+\end{calculation}
+
+\begin{keypoint}[A/B测试的最优停止规则]
+\begin{enumerate}
+    \item 计算当前的Expected Loss
+    \item 估算继续测试能降低多少EL
+    \item 比较：EL降低的长期价值 vs 测试成本
+    \item 当价值 $<$ 成本时停止
+\end{enumerate}
+
+这正是\textbf{最优学习}的核心思想在实践中的应用！
+\end{keypoint}
+
+%=============================================================================
+\section{为什么是$\sqrt{T}$：信息论下界}
+%=============================================================================
+
+\begin{plainwords}
+无论是MWU、UCB还是Thompson Sampling，Regret都是$O(\sqrt{T})$。巧合吗？
+
+不是！$\sqrt{T}$是\textbf{信息积累速度}的本质限制。任何算法都不可能做得更好！
+\end{plainwords}
+
+\subsection{下界定理}
+
+\begin{theorem}[Lai-Robbins下界，1985]
+对于任何"一致"的bandit算法（即对所有问题实例都有次线性Regret），存在问题实例使得：
+\[
+\liminf_{T \to \infty} \frac{\mathbb{E}[\text{Regret}_T]}{\ln T} \geq \sum_{a: \Delta_a > 0} \frac{\Delta_a}{D_{KL}(\mu_a \| \mu^*)}
+\]
+其中$D_{KL}$是KL散度。
+\end{theorem}
+
+\begin{plainwords}[这个下界在说什么]
+要区分两个arm，你需要足够的\textbf{信息}。
+
+信息积累的速度由KL散度决定：
+\begin{itemize}
+    \item KL散度大 → 两个分布差异大 → 容易区分 → 不需要很多样本
+    \item KL散度小 → 两个分布差异小 → 难以区分 → 需要很多样本
+\end{itemize}
+
+定理说的是：无论你用什么算法，至少需要$O(\ln T / D_{KL})$次采样才能区分。
+
+这些"必需的探索"带来的Regret是不可避免的！
+\end{plainwords}
+
+\subsection{证明思路}
+
+\begin{proof}[证明梗概]
+\textbf{核心思想}：构造两个"难以区分"的问题实例，证明任何算法在其中一个上必然有大Regret。
+
+\textbf{Step 1：构造两个实例}
+
+实例1：arm 1的$\mu_1 = 0.5$，arm 2的$\mu_2 = 0.5 - \epsilon$
+
+实例2：arm 1的$\mu_1 = 0.5$，arm 2的$\mu_2 = 0.5 + \epsilon$
+
+在实例1中，arm 1是最优的；在实例2中，arm 2是最优的。
+
+\textbf{Step 2：信息论约束}
+
+设算法在$T$轮内选中arm 2共$N_2$次。
+
+由数据处理不等式和KL散度的链式法则：
+\[
+D_{KL}(P_1 \| P_2) \leq \mathbb{E}_1[N_2] \cdot D_{KL}(\text{Ber}(0.5-\epsilon) \| \text{Ber}(0.5+\epsilon))
+\]
+
+其中$P_1, P_2$是两个实例下观测数据的分布。
+
+\textbf{Step 3：区分的必要条件}
+
+如果算法在两个实例上都有低Regret，它必须能区分这两个实例（选对最优arm）。
+
+区分需要$D_{KL}(P_1 \| P_2) \geq c$（某个常数）。
+
+由Step 2，这意味着：
+\[
+\mathbb{E}_1[N_2] \geq \frac{c}{D_{KL}(\text{Ber}(0.5-\epsilon) \| \text{Ber}(0.5+\epsilon))}
+\]
+
+\textbf{Step 4：KL散度的计算}
+
+对于Bernoulli分布，当$\epsilon$小时：
+\[
+D_{KL}(\text{Ber}(p) \| \text{Ber}(p+\epsilon)) \approx \frac{\epsilon^2}{p(1-p)}
+\]
+
+所以：
+\[
+\mathbb{E}_1[N_2] \geq \frac{c \cdot 0.25}{\epsilon^2} = \frac{c'}{4\epsilon^2}
+\]
+
+\textbf{Step 5：Regret下界}
+
+在实例1中，每次选arm 2都有Regret $\epsilon$：
+\[
+\text{Regret} \geq \epsilon \cdot \mathbb{E}[N_2] \geq \frac{c'}{4\epsilon}
+\]
+
+取$\epsilon = O(1/\sqrt{T})$来最大化这个下界... 等等，这里需要更精细的分析。
+
+实际上，通过选择$\epsilon = O(\sqrt{\ln T / T})$，可以得到：
+\[
+\text{Regret} \geq \Omega(\sqrt{T})
+\]
+\end{proof}
+
+\begin{calculation}[具体数值感受]
+两个Bernoulli arm，$\mu_1 = 0.5$，$\mu_2 = 0.5 + \epsilon$。
+
+KL散度：
+\[
+D_{KL} = 0.5\ln\frac{0.5}{0.5-\epsilon} + 0.5\ln\frac{0.5}{0.5+\epsilon} \approx \frac{\epsilon^2}{0.25} = 4\epsilon^2
+\]
+
+当$\epsilon = 0.1$时：$D_{KL} \approx 0.04$
+
+要有90\%把握区分两个arm（$D_{KL}(P_1 \| P_2) \geq 2.3$），需要：
+\[
+N_2 \geq \frac{2.3}{0.04} = 57.5 \text{次}
+\]
+
+当$\epsilon = 0.01$时：$D_{KL} \approx 0.0004$
+
+需要：$N_2 \geq \frac{2.3}{0.0004} = 5750$次！
+
+差距越小，需要的探索越多，这是不可避免的。
+\end{calculation}
+
+\subsection{从下界到$\sqrt{T}$}
+
+\begin{calculation}[为什么worst-case是$\sqrt{T}$]
+考虑对手可以选择$\Delta$：
+
+Regret下界 $\geq \frac{c \ln T}{\Delta}$（需要探索来区分）
+
+同时，Regret $\geq \Delta \cdot T \cdot p$（选错arm的代价），其中$p$是选错概率。
+
+当$\Delta$很小时，第一项主导；当$\Delta$大时，选错的代价主导。
+
+\textbf{对手的最优策略}：选$\Delta$使两项平衡。
+
+令$\frac{c\ln T}{\Delta} \approx \Delta \cdot \text{(某些项)}$
+
+解得$\Delta^* \approx \sqrt{\frac{c\ln T}{T}}$
+
+此时Regret $\approx \sqrt{T \ln T}$
+
+所以任何算法的worst-case Regret至少是$\Omega(\sqrt{T})$！
+\end{calculation}
+
+\begin{keypoint}[$\sqrt{T}$的本质]
+\begin{enumerate}
+    \item 估计精度以$1/\sqrt{n}$改善（中心极限定理/Hoeffding）
+    \item 区分差距$\Delta$的arm需要$O(1/\Delta^2)$样本
+    \item 当$\Delta$可以任意小时，worst-case探索代价是$O(\sqrt{T})$
+    \item 这是\textbf{信息论极限}，没有算法能突破
+\end{enumerate}
+\end{keypoint}
+
+\subsection{$\log T$ vs $\sqrt{T}$：量词顺序的故事}
+
+\begin{plainwords}[一个常见的困惑]
+等等！前面5.3节说UCB的Regret是$O(\log T / \Delta)$，本节又说信息论下界是$\Omega(\sqrt{T})$。$\log T$ 比 $\sqrt{T}$ 慢得多——这两个不矛盾吗？
+
+不矛盾。\textbf{它们回答的是两个不同的问题}，区别在\textbf{量词顺序}。
+\end{plainwords}
+
+\begin{keypoint}[两种渐近]
+\textbf{Instance-dependent（先固定问题，再让$T\to\infty$）}：
+\[
+\forall \text{ 问题 } \nu,\quad \limsup_{T\to\infty} \frac{\mathbb{E}_\nu[\text{Regret}_T]}{\log T} < \infty
+\]
+这是\textbf{渐近}陈述。每个具体问题都有自己的固定$\Delta$，让$T$增大，UCB的Regret按$\log T$增长。Lai-Robbins下界也是这个口径。
+
+\textbf{Minimax（先取worst-case问题，再看$T$）}：
+\[
+\forall T,\quad \sup_{\nu} \mathbb{E}_\nu[\text{Regret}_T] = \Theta(\sqrt{KT})
+\]
+这是\textbf{非渐近}（finite-$T$）陈述。对每个$T$，对手现造一个最难的问题。
+
+\textbf{关键}：“最难的问题”会随$T$移动！同一个固定问题，在两种分析里给出的Regret量级完全不同。
+\end{keypoint}
+
+\begin{calculation}[worst-case instance如何随$T$移动]
+对手最优$\Delta^*(T) = \sqrt{\log T / T}$，这随$T$增大而\textbf{减小}：
+
+\begin{center}
+\begin{tabular}{c|c|l}
+\toprule
+$T$ & $\Delta^*(T)$ & 对手要求的问题难度 \\
+\midrule
+$10^2$ & 0.21 & 容易区分（大$\Delta$） \\
+$10^4$ & 0.030 & 中等 \\
+$10^6$ & 0.0037 & 几乎做不到 \\
+$10^8$ & 0.00043 & 极难区分（极小$\Delta$） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+对手每个$T$都\textbf{现造}一个“刚好让UCB这$T$轮内区分不出来的”问题。这种“动态对手”才能让UCB输到$\sqrt{T \log T}$。
+
+如果你拿一个\textbf{固定}的具体问题（比如$\Delta = 0.1$），对手就没法这样调。
+\end{calculation}
+
+\begin{calculation}[同一个固定问题在两种regime之间穿越]
+固定$\Delta = 0.1$的具体问题，看不同$T$下Regret的实际量级：
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+$T$ & $\sqrt{\log T / T}$ vs $\Delta = 0.1$ & Regime & Regret量级 \\
+\midrule
+$10^2$ & $0.21 > 0.1$ & 仍在探索期 & $\Delta T = 10$ \\
+$10^4$ & $0.030 < 0.1$ & 已进入log期 & $\frac{8 \log T}{\Delta} \approx 736$ \\
+$10^6$ & $0.0037 \ll 0.1$ & 深入log期 & $\frac{8 \log T}{\Delta} \approx 1105$ \\
+$10^8$ & $0.00043 \ll 0.1$ & 极深log期 & $\frac{8 \log T}{\Delta} \approx 1474$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+注意从$T = 10^4$到$T = 10^8$（$T$增长$10^4$倍），Regret只从736涨到1474（约2倍）——这正是$\log T$对\textbf{固定问题}的渐近行为。
+
+但如果对手在$T = 10^8$时把问题换成$\Delta = 0.0004$，UCB的Regret会被推到$\sqrt{T\log T} \approx 43000$。\textbf{固定的问题永远看不到$\sqrt{T}$增长，要看到$\sqrt{T}$，对手必须按$T$现挑问题。}
+\end{calculation}
+
+\begin{plainwords}[一句话总结]
+\begin{itemize}
+    \item $\log T$ 在说：\textbf{“给我足够长时间，我会看清这个固定问题”}（statistical learner视角）
+    \item $\sqrt{T}$ 在说：\textbf{“无论$T$多长，总有一个问题刚好让我看不清”}（game theorist视角）
+\end{itemize}
+
+\textbf{工程意义}：
+\begin{itemize}
+    \item 跑一个具体A/B测试（$\Delta$是固定的物理量）→ instance-dependent，期待$\log T$
+    \item 设计鲁棒bandit算法（要对未知$\Delta$都好用）→ minimax，天花板$\sqrt{T}$
+\end{itemize}
+
+\textbf{回看9.3节}：那里“对手选$\Delta = \Theta(\sqrt{\log T/T})$”这一步就是game theorist在按$T$现挑对手；跟5.3节UCB分析里把$\Delta$当常数是\textbf{两套完全不同的设定}，所以一个得$\log T$、一个得$\sqrt{T}$。
+\end{plainwords}
+
+\begin{keypoint}[UCB是不是minimax最优？]
+不完全是。三档bandit算法的对比：
+
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& Instance-dep上界 & Minimax上界 \\
+\midrule
+UCB1 & $\sum_a \frac{8\log T}{\Delta_a}$ \checkmark{}（达到Lai-Robbins） & $O(\sqrt{KT \log T})$ \\
+MOSS / KL-UCB & 同上 \checkmark & $O(\sqrt{KT})$ \checkmark{}（达到minimax下界） \\
+Minimax下界 & $\Omega(\sum_a \frac{\log T}{D_{KL}})$ & $\Omega(\sqrt{KT})$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+UCB1只差一个$\sqrt{\log T}$因子；MOSS（Minimax Optimal Strategy in Stochastic case）通过更精细的confidence bonus去掉这个因子，\textbf{两个口径都达到下界}。
+\end{keypoint}
+
+%=============================================================================
+\section{总结}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+概念 & 公式 & 数值例子 \\
+\midrule
+Regret & $\sum_t \ell_t - \min_x \sum_t \ell_t(x)$ & $2.2 - 2.4 = -0.2$ \\
+MWU更新 & $w \leftarrow w(1-\eta\ell)$ & $1 \times 0.6 = 0.6$ \\
+MWU界 & $2\sqrt{T\ln N}$ & $2\sqrt{10000 \times 4.6} = 428$ \\
+Hoeffding & $P(|\hat\mu-\mu|>\epsilon) \leq 2e^{-2n\epsilon^2}$ & $n=100, \epsilon=0.1$: 27\% \\
+95\%置信区间 & $\pm\sqrt{1.84/n}$ & $n=100$: $\pm 0.14$ \\
+UCB & $\hat\mu + \sqrt{2\ln t/n}$ & $0 + 1.67 = 1.67$ \\
+Beta更新 & Beta$(\alpha+s, \beta+f)$ & Beta(1,1)+3赢2输=Beta(4,3) \\
+EI & $(\mu-f^+)\Phi(Z) + \sigma\phi(Z)$ & $0.1 \times 0.841 + 0.1 \times 0.242 = 0.108$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{magicbox}
+\textbf{本讲核心信息}：
+\begin{enumerate}
+    \item 即使对手故意坑你，Regret也只有$O(\sqrt{T})$——平均后悔趋于零
+    \item \textbf{乘法惩罚}让差选项指数衰减
+    \item \textbf{乐观原则}：不确定就当它好（UCB）
+    \item \textbf{概率匹配}：按可能性分配探索（Thompson Sampling）
+    \item $\sqrt{T}$是信息积累速度的本质限制
+\end{enumerate}
+\end{magicbox}
+
+
+
+\end{document}

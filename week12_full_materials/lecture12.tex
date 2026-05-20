@@ -1,0 +1,3651 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{framed}
+\usepackage{pifont}
+
+\geometry{margin=2.5cm}
+\pgfplotsset{compat=1.17}
+
+% 定理环境
+\theoremstyle{definition}
+\newtheorem{definition}{定义}[section]
+\newtheorem{example}{例}[section]
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}{引理}[section]
+\newtheorem{corollary}{推论}[section]
+\newtheorem{remark}{注记}[section]
+\newtheorem{proposition}{命题}[section]
+
+% 自定义盒子
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{intuition}[1][直觉]{
+  colback=blue!5!white,
+  colframe=blue!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{keypoint}[1][关键点]{
+  colback=red!5!white,
+  colframe=red!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{plainwords}[1][大白话]{
+  colback=yellow!8!white,
+  colframe=yellow!60!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{proofidea}[1][证明思路]{
+  colback=green!5!white,
+  colframe=green!50!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{magicbox}[1][神奇结果]{
+  colback=purple!5!white,
+  colframe=purple!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{calculation}[1][动手算一算]{
+  colback=orange!5!white,
+  colframe=orange!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\title{\textbf{第12周：MDP与Tabular RL理论} \\[0.5em]
+\large 从Bandit到序贯决策，收敛性理论的完整图景}
+\author{优化算法课程讲义}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+上周我们学习了Bandit问题：每轮选一个arm，拿到奖励，选择之间\textbf{相互独立}。本周我们加入\textbf{状态}：你的选择不仅得到奖励，还会改变世界状态，影响未来的选择。这就是马尔可夫决策过程(MDP)。我们将证明Bellman方程为何成立、值迭代为何收敛，以及各种RL算法的收敛性理论。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{从Bandit到MDP：一步之遥}
+%=============================================================================
+
+\begin{plainwords}[回顾上周]
+上周的Bandit问题：
+\begin{itemize}
+    \item $K$台老虎机，每台有未知的期望奖励$\mu_a$
+    \item 每轮选一台拉，观察奖励
+    \item 选择之间\textbf{完全独立}——你选什么不影响下一轮的世界
+\end{itemize}
+
+我们学了UCB（乐观原则）和Thompson Sampling（概率匹配），Regret都是$O(\sqrt{T})$。
+\end{plainwords}
+
+\begin{plainwords}[本周的扩展]
+现实中，决策往往\textbf{改变世界状态}：
+\begin{itemize}
+    \item 下棋：每步棋改变棋盘局面
+    \item 开车：每个动作改变位置和速度  
+    \item 治疗：每次用药改变病人状态
+\end{itemize}
+
+MDP就是在Bandit基础上加一个东西：\textbf{状态转移}。
+
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& Bandit & MDP \\
+\midrule
+状态 & 只有1个（或者说没有） & 多个状态$s \in S$ \\
+动作效果 & 只影响当前奖励 & 影响奖励 + 转移到新状态 \\
+决策 & 独立的 & 序贯的，相互影响 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{plainwords}
+
+\begin{example}[从老虎机到GridWorld]
+\textbf{Bandit}：3台老虎机，选一台拉，得奖励，结束。下一轮还是面对同样的3台机器。
+
+\textbf{MDP (GridWorld)}：你在一个$4\times4$网格里，每个格子是一个\textbf{状态}。
+
+\begin{center}
+\begin{tikzpicture}[scale=0.7]
+\draw[step=1cm,gray,very thin] (0,0) grid (4,4);
+\node at (0.5,0.5) {\small 起点};
+\node at (3.5,3.5) {\small +10};
+\node at (1.5,2.5) {\small -5};
+\draw[thick,->] (0.5,0.7) -- (0.5,1.3);
+\draw[thick,->] (0.7,1.5) -- (1.3,1.5);
+\end{tikzpicture}
+\end{center}
+
+\begin{itemize}
+    \item 你在某个格子（状态$s$）
+    \item 选择一个方向走（动作$a$）
+    \item 可能滑到旁边（随机转移$P(s'|s,a)$）
+    \item 到达新格子，得到那个格子的奖励（$R(s,a)$）
+    \item 现在你在\textbf{新状态}$s'$，面对的选择变了！
+\end{itemize}
+
+这就是Bandit和MDP的核心区别：\textbf{你的选择改变了你面对的世界}。
+\end{example}
+
+%=============================================================================
+\section{MDP形式化定义}
+%=============================================================================
+
+\begin{definition}[马尔可夫决策过程 (MDP)]
+MDP是一个五元组$(S, A, P, R, \gamma)$：
+\begin{itemize}
+    \item $S$：状态空间（$|S|$个状态）
+    \item $A$：动作空间（$|A|$个动作）
+    \item $P: S \times A \times S \to [0,1]$：转移概率，$P(s'|s,a)$
+    \item $R: S \times A \to \mathbb{R}$：奖励函数
+    \item $\gamma \in [0,1)$：折扣因子
+\end{itemize}
+\end{definition}
+
+\begin{example}[咖啡店选址——最简单的MDP]
+你要决定每天去哪家咖啡店。
+
+\textbf{状态}$S$：你现在的心情 $\{$开心, 一般, 烦躁$\}$
+
+\textbf{动作}$A$：去哪家店 $\{$星巴克, 瑞幸$\}$
+
+\textbf{转移}$P$：
+\begin{itemize}
+    \item 心情一般 + 去星巴克（贵但好喝）→ 70\%变开心，30\%还是一般
+    \item 心情一般 + 去瑞幸（便宜但一般）→ 40\%变开心，60\%还是一般
+    \item 心情烦躁 + 去星巴克 → 50\%变一般，50\%还是烦躁
+\end{itemize}
+
+\textbf{奖励}$R$：开心时+2，一般时+1，烦躁时-1
+
+\textbf{问题}：长期来看，应该怎么选咖啡店？
+\end{example}
+
+\begin{plainwords}[马尔可夫性质]
+"马尔可夫"的意思是：\textbf{未来只依赖于现在，不依赖于过去}。
+
+\textbf{生活例子}：天气预报
+
+"明天是否下雨"只取决于"今天的天气状况"，不取决于"上周下了几天雨"。
+
+如果今天是晴天，明天30\%下雨。不管之前连续晴了3天还是30天，这个概率都是30\%。
+
+这大大简化了问题：我们只需要记住"现在在哪"，不需要记住"怎么来的"。
+\end{plainwords}
+
+\begin{example}[为什么需要折扣因子$\gamma$]
+假设你可以选择：
+\begin{itemize}
+    \item 选项A：今天拿100块
+    \item 选项B：一年后拿100块
+\end{itemize}
+
+大多数人选A！为什么？
+
+\begin{enumerate}
+    \item \textbf{不确定性}：一年后的事谁知道呢
+    \item \textbf{机会成本}：今天的100块可以投资
+    \item \textbf{即时满足}：人类天生更看重眼前
+\end{enumerate}
+
+$\gamma$就是"未来的钱打几折"。$\gamma = 0.9$意味着：
+\begin{itemize}
+    \item 明天的1块 = 今天的0.9块
+    \item 后天的1块 = 今天的$0.9^2 = 0.81$块
+    \item 一年后的1块 = 今天的$0.9^{365} \approx 0$块
+\end{itemize}
+\end{example}
+
+\begin{definition}[策略与值函数]
+\textbf{策略}$\pi: S \to A$（或$\pi: S \to \Delta(A)$）告诉我们在每个状态选什么动作。
+
+\textbf{值函数}$V^\pi(s)$：从状态$s$出发，按策略$\pi$行动，获得的期望累积折扣奖励：
+\[
+V^\pi(s) = \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t R(s_t, a_t) \mid s_0 = s\right]
+\]
+
+\textbf{动作-值函数}$Q^\pi(s,a)$：从状态$s$采取动作$a$，然后按$\pi$行动：
+\[
+Q^\pi(s,a) = R(s,a) + \gamma \sum_{s'} P(s'|s,a) V^\pi(s')
+\]
+\end{definition}
+
+\begin{example}[值函数的直觉——房产估值]
+把$V(s)$想象成\textbf{房子的价值}：
+
+\begin{itemize}
+    \item 状态$s$ = 房子的位置
+    \item 动作$a$ = 装修方案
+    \item 奖励$R$ = 每月租金收入
+    \item 转移$P$ = 装修后房子状态变化（可能升值也可能出问题）
+\end{itemize}
+
+$V(s)$就是"这个位置的房子，长期能给我带来多少租金收入（折现到今天）"。
+
+好位置（市中心）$V$高，差位置（偏远郊区）$V$低。
+\end{example}
+
+\begin{calculation}[$V$和$Q$的关系]
+$V^\pi(s) = Q^\pi(s, \pi(s))$（确定性策略）
+
+\textbf{生活比喻}：
+\begin{itemize}
+    \item $V(s)$ = 在状态$s$，按我的习惯做事，能得多少分
+    \item $Q(s,a)$ = 在状态$s$，如果这次选动作$a$，能得多少分
+    \item $V(s) = Q(s, \text{我的习惯选择})$
+\end{itemize}
+
+\textbf{数值例子}：状态$s$，动作$a$，奖励$R(s,a)=1$，$\gamma=0.9$。
+
+转移：50\%到$s_1$（$V^\pi(s_1)=5$），50\%到$s_2$（$V^\pi(s_2)=3$）。
+
+\[
+Q^\pi(s,a) = \underbrace{1}_{\text{立即奖励}} + \underbrace{0.9}_{\text{折扣}} \times \underbrace{(0.5 \times 5 + 0.5 \times 3)}_{\text{未来期望价值}} = 1 + 3.6 = 4.6
+\]
+\end{calculation}
+
+%=============================================================================
+\section{Bellman方程：递归的威力}
+%=============================================================================
+
+\begin{plainwords}
+Bellman方程是RL的\textbf{牛顿定律}，一切都从它推导出来。
+
+核心思想极其简单：\textbf{今天的价值 = 今天的奖励 + 明天的价值（打折）}
+
+这个递归关系把无限期问题变成了一步一步的计算。
+\end{plainwords}
+
+\begin{example}[Bellman方程的生活版——职业规划]
+你在考虑职业发展，当前状态是"初级工程师"。
+
+\textbf{问}：这个状态的"价值"是多少？（未来能赚多少钱）
+
+\textbf{Bellman式思考}：
+\[
+V(\text{初级}) = \underbrace{15\text{万}}_{\text{今年工资}} + 0.9 \times \underbrace{[\text{明年状态的价值}]}_{\text{可能升职/跳槽/原地}}
+\]
+
+如果30\%概率升职（高级值50万），70\%概率还是初级：
+\[
+V(\text{初级}) = 15 + 0.9 \times (0.3 \times 50 + 0.7 \times V(\text{初级}))
+\]
+
+解方程：$V = 15 + 13.5 + 0.63V$，得$V(\text{初级}) = 77$万。
+
+\textbf{这就是Bellman方程}：当前价值 = 即时回报 + 折扣后的未来期望！
+\end{example}
+
+\subsection{Bellman期望方程}
+
+\begin{theorem}[Bellman期望方程]
+对任意策略$\pi$：
+\[
+V^\pi(s) = \sum_a \pi(a|s) \left[R(s,a) + \gamma \sum_{s'} P(s'|s,a) V^\pi(s')\right]
+\]
+用算子形式：$V^\pi = T^\pi V^\pi$，即$V^\pi$是Bellman算子$T^\pi$的\textbf{不动点}。
+\end{theorem}
+
+\begin{example}[2状态MDP——学生的一天]
+\textbf{状态}：\{学习中, 摸鱼中\}
+
+\textbf{转移}（无动作，自动转移）：
+\begin{itemize}
+    \item 学习中 → 60\%继续学习，40\%开始摸鱼
+    \item 摸鱼中 → 30\%开始学习，70\%继续摸鱼
+\end{itemize}
+
+\textbf{奖励}：学习+2分，摸鱼+1分。\textbf{$\gamma = 0.9$}
+
+\textbf{Bellman方程}：
+\begin{align*}
+V(\text{学习}) &= 2 + 0.9 \times (0.6 \times V(\text{学习}) + 0.4 \times V(\text{摸鱼})) \\
+V(\text{摸鱼}) &= 1 + 0.9 \times (0.3 \times V(\text{学习}) + 0.7 \times V(\text{摸鱼}))
+\end{align*}
+
+\textbf{求解}：从第二个方程整理：
+$V(\text{摸鱼}) = 1 + 0.27 V(\text{学习}) + 0.63 V(\text{摸鱼})$
+
+$0.37 V(\text{摸鱼}) = 1 + 0.27 V(\text{学习})$ → $V(\text{摸鱼}) = 2.7 + 0.73 V(\text{学习})$
+
+代入第一个：$V(\text{学习}) = 2 + 0.54 V(\text{学习}) + 0.36(2.7 + 0.73 V(\text{学习}))$
+
+$V(\text{学习}) = 2.97 + 0.8 V(\text{学习})$ → $V(\text{学习}) = 14.85$
+
+$V(\text{摸鱼}) = 2.7 + 0.73 \times 14.85 = 13.54$
+
+\textbf{结论}：学习状态更"值钱"！（14.85 vs 13.54）
+\end{example}
+
+\begin{proof}[Bellman期望方程的证明]
+从定义展开：
+\begin{align*}
+V^\pi(s) &= \mathbb{E}_\pi\left[\sum_{t=0}^\infty \gamma^t R(s_t, a_t) \mid s_0 = s\right] \\
+&= \mathbb{E}_\pi[R(s_0, a_0) | s_0 = s] + \gamma \mathbb{E}_\pi\left[\sum_{t=1}^\infty \gamma^{t-1} R(s_t, a_t) \mid s_0 = s\right]
+\end{align*}
+
+第一项：$\mathbb{E}_\pi[R(s_0, a_0) | s_0 = s] = \sum_a \pi(a|s) R(s,a)$
+
+第二项：利用马尔可夫性，给定$s_1$，未来与$s_0$独立：
+\[
+\mathbb{E}_\pi\left[\sum_{t=1}^\infty \gamma^{t-1} R(s_t, a_t) \mid s_0 = s\right] = \sum_a \pi(a|s) \sum_{s'} P(s'|s,a) V^\pi(s')
+\]
+
+合并得证。
+\end{proof}
+
+\subsection{Bellman最优方程}
+
+\begin{definition}[最优值函数]
+$V^*(s) = \max_\pi V^\pi(s)$，$Q^*(s,a) = \max_\pi Q^\pi(s,a)$
+\end{definition}
+
+\begin{theorem}[Bellman最优方程]
+\[
+V^*(s) = \max_a \left[R(s,a) + \gamma \sum_{s'} P(s'|s,a) V^*(s')\right]
+\]
+\[
+Q^*(s,a) = R(s,a) + \gamma \sum_{s'} P(s'|s,a) \max_{a'} Q^*(s', a')
+\]
+\end{theorem}
+
+\begin{example}[期望 vs 最优——午餐选择]
+你饿了，两个选择：
+\begin{itemize}
+    \item 动作A：食堂（确定7分满意度）
+    \item 动作B：新餐厅（50\%概率9分超好吃，50\%概率5分踩雷）
+\end{itemize}
+
+\textbf{如果你的策略是"随机选"}（各50\%）：
+\[
+V^{\pi} = 0.5 \times 7 + 0.5 \times (0.5 \times 9 + 0.5 \times 5) = 0.5 \times 7 + 0.5 \times 7 = 7
+\]
+
+\textbf{最优策略}：比较两个动作的期望
+\begin{itemize}
+    \item $Q^*(s, \text{食堂}) = 7$
+    \item $Q^*(s, \text{新餐厅}) = 0.5 \times 9 + 0.5 \times 5 = 7$
+\end{itemize}
+
+两个一样好！$V^* = 7$。
+
+\textbf{但如果}新餐厅是60\%概率9分：$Q^*(s, \text{新餐厅}) = 7.4 > 7$
+
+那最优策略就是\textbf{总是选新餐厅}，$V^* = 7.4$。
+\end{example}
+
+\begin{plainwords}[期望 vs 最优]
+\textbf{Bellman期望方程}：按固定策略$\pi$行动的价值，用$\sum_a \pi(a|s)$加权
+
+\textbf{Bellman最优方程}：每一步都选最好的，用$\max_a$
+
+最优策略就是贪婪策略：$\pi^*(s) = \arg\max_a Q^*(s,a)$
+\end{plainwords}
+
+%=============================================================================
+\section{值迭代：收缩映射的魔力}
+%=============================================================================
+
+\begin{plainwords}
+知道Bellman方程是不动点后，怎么\textbf{找到}它？
+
+最简单的方法：\textbf{迭代}！从任意初始值开始，反复应用Bellman更新。
+
+为什么能行？因为Bellman算子是\textbf{收缩映射}——每次迭代都让你更接近真解！
+\end{plainwords}
+
+\begin{example}[收缩映射的生活比喻——调节水温]
+你想把浴缸水温调到40°C，但你不知道现在多少度。
+
+\textbf{策略}：每次加一点热水或冷水，让温度往40°C靠近。
+
+如果你的调节方式是"每次让温度往40°C移动一半"：
+\begin{itemize}
+    \item 现在60°C → 加冷水 → 变成50°C（离目标近了一半）
+    \item 现在50°C → 继续调 → 变成45°C
+    \item 现在45°C → 继续调 → 变成42.5°C
+    \item ...
+\end{itemize}
+
+\textbf{关键性质}：每次操作后，误差\textbf{至少减半}！
+
+这就是"收缩映射"：每次操作让你离目标更近，而且有\textbf{保证的进步}。
+
+值迭代就是这样：每次Bellman更新，误差至少乘以$\gamma$（比如0.9）。
+\end{example}
+
+\subsection{收缩映射与Banach不动点定理}
+
+\begin{definition}[收缩映射]
+算子$T$是$\gamma$-收缩映射，如果对所有$V, V'$：
+\[
+\|TV - TV'\|_\infty \leq \gamma \|V - V'\|_\infty
+\]
+\end{definition}
+
+\begin{example}[理解收缩映射——橡皮筋]
+想象一根橡皮筋上有两个点$V$和$V'$，距离是$d$。
+
+"收缩映射"就像\textbf{同时拉两个点}，但拉完之后距离变成$\gamma \cdot d$。
+
+如果$\gamma = 0.9$，每次操作距离缩短10\%。
+如果$\gamma = 0.5$，每次操作距离缩短50\%。
+
+不管一开始两点离多远，反复操作后它们会\textbf{越来越近}，最终重合！
+
+重合的那个点就是\textbf{不动点}——所有起点最终都会到达那里。
+\end{example}
+
+\begin{theorem}[Bellman算子是收缩映射]
+Bellman最优算子$(T^* V)(s) = \max_a [R(s,a) + \gamma \sum_{s'} P(s'|s,a) V(s')]$是$\gamma$-收缩。
+\end{theorem}
+
+\begin{proof}
+对任意$V, V'$和状态$s$，设$a^* = \arg\max_a [R(s,a) + \gamma \sum_{s'} P(s'|s,a) V(s')]$。
+
+\begin{align*}
+(T^* V)(s) - (T^* V')(s) &\leq [R(s,a^*) + \gamma \sum_{s'} P(s'|s,a^*) V(s')] - [R(s,a^*) + \gamma \sum_{s'} P(s'|s,a^*) V'(s')] \\
+&= \gamma \sum_{s'} P(s'|s,a^*) [V(s') - V'(s')] \\
+&\leq \gamma \|V - V'\|_\infty
+\end{align*}
+
+类似地可证$(T^* V')(s) - (T^* V)(s) \leq \gamma \|V - V'\|_\infty$。
+
+取max得$\|T^* V - T^* V'\|_\infty \leq \gamma \|V - V'\|_\infty$。
+\end{proof}
+
+\begin{plainwords}[证明的直觉]
+为什么Bellman算子是收缩的？
+
+因为Bellman更新里有个$\gamma$在前面！
+
+$V' = R + \gamma \times (\text{未来价值})$
+
+未来价值的误差被$\gamma$打了折扣，所以误差在传播过程中\textbf{自然衰减}。
+\end{plainwords}
+
+\begin{theorem}[Banach不动点定理]
+若$T$是完备度量空间上的$\gamma$-收缩映射（$\gamma < 1$），则：
+\begin{enumerate}
+    \item $T$有\textbf{唯一}不动点$V^*$
+    \item 从任意$V_0$出发，$V_k = T^k V_0 \to V^*$
+    \item 收敛速度：$\|V_k - V^*\|_\infty \leq \gamma^k \|V_0 - V^*\|_\infty$
+\end{enumerate}
+\end{theorem}
+
+\begin{example}[Banach定理的直觉——GPS导航]
+你要去一个目的地（不动点$V^*$），但你不知道在哪。
+
+\textbf{GPS的承诺}：每走一步，你离目的地的距离\textbf{至少缩短10\%}。
+
+那么：
+\begin{itemize}
+    \item 不管你从哪出发，最终一定能到
+    \item 只有一个目的地（唯一性）
+    \item 走$k$步后，距离最多是初始的$0.9^k$
+\end{itemize}
+
+值迭代就是这样的GPS：每次Bellman更新保证让你更接近$V^*$。
+\end{example}
+
+\begin{proof}[Banach不动点定理的证明]
+\textbf{存在性}：取任意$V_0$，令$V_k = T^k V_0$。对$m > n$：
+\begin{align*}
+\|V_m - V_n\| &\leq \sum_{i=n}^{m-1} \|V_{i+1} - V_i\| \leq \sum_{i=n}^{m-1} \gamma^i \|V_1 - V_0\| \leq \frac{\gamma^n}{1-\gamma} \|V_1 - V_0\|
+\end{align*}
+
+当$n \to \infty$，右边趋于0，所以$\{V_k\}$是Cauchy序列，收敛到某个$V^*$。
+
+由$T$的连续性，$TV^* = T(\lim_k V_k) = \lim_k TV_k = \lim_k V_{k+1} = V^*$。
+
+\textbf{唯一性}：若$V^*, \tilde{V}^*$都是不动点，则：
+\[
+\|V^* - \tilde{V}^*\| = \|TV^* - T\tilde{V}^*\| \leq \gamma \|V^* - \tilde{V}^*\|
+\]
+只能$V^* = \tilde{V}^*$。
+\end{proof}
+
+\begin{algorithm}[H]
+\caption{值迭代 (Value Iteration)}
+\begin{algorithmic}[1]
+\State 初始化$V_0(s) = 0$对所有$s$
+\For{$k = 0, 1, 2, \ldots$}
+    \For{每个状态$s$}
+        \State $V_{k+1}(s) = \max_a \left[R(s,a) + \gamma \sum_{s'} P(s'|s,a) V_k(s')\right]$
+    \EndFor
+    \If{$\|V_{k+1} - V_k\|_\infty < \epsilon(1-\gamma)/(2\gamma)$}
+        \State 停止
+    \EndIf
+\EndFor
+\State 输出$\pi(s) = \arg\max_a [R(s,a) + \gamma \sum_{s'} P(s'|s,a) V_k(s')]$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{calculation}[收敛速度]
+$\gamma = 0.9$，初始误差$\|V_0 - V^*\| = 100$。
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+迭代次数$k$ & $\gamma^k$ & 误差上界 \\
+\midrule
+10 & 0.35 & 35 \\
+50 & 0.005 & 0.5 \\
+100 & $3\times10^{-5}$ & 0.003 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+误差每$\log_{1/\gamma} 10 = \frac{\ln 10}{\ln(1/0.9)} \approx 22$次迭代减少10倍。
+
+\textbf{$\gamma$越大，收敛越慢}：$\gamma=0.99$需要230次迭代误差减10倍。
+\end{calculation}
+
+%=============================================================================
+\section{策略迭代：更快的收敛}
+%=============================================================================
+
+\begin{plainwords}
+值迭代每次只更新一点点。策略迭代更激进：
+
+\begin{enumerate}
+    \item \textbf{策略评估}：完全解出当前策略$\pi$的值函数$V^\pi$
+    \item \textbf{策略改进}：根据$V^\pi$贪婪地更新策略
+\end{enumerate}
+
+每次跳到"当前策略下的最优"，而不是一点点挪。
+\end{plainwords}
+
+\begin{theorem}[策略改进定理]
+设$\pi'(s) = \arg\max_a Q^\pi(s,a)$。则$V^{\pi'}(s) \geq V^\pi(s)$对所有$s$成立。
+
+等号成立当且仅当$\pi$已经是最优策略。
+\end{theorem}
+
+\begin{proof}
+对任意$s$：
+\begin{align*}
+V^\pi(s) &\leq \max_a Q^\pi(s,a) = Q^\pi(s, \pi'(s)) \\
+&= R(s, \pi'(s)) + \gamma \sum_{s'} P(s'|s, \pi'(s)) V^\pi(s') \\
+&\leq R(s, \pi'(s)) + \gamma \sum_{s'} P(s'|s, \pi'(s)) \max_{a'} Q^\pi(s', a')
+\end{align*}
+
+继续展开，得到$V^\pi(s) \leq V^{\pi'}(s)$。
+\end{proof}
+
+\begin{theorem}[策略迭代有限步收敛]
+策略迭代最多$|A|^{|S|}$次迭代收敛到最优策略。
+
+实际中通常只需5-20次迭代。
+\end{theorem}
+
+%=============================================================================
+\section{Monte Carlo方法：最朴素的model-free方法}
+%=============================================================================
+
+\begin{plainwords}
+值迭代、策略迭代都假设我们\textbf{完全知道}$P, R$。
+
+现实里更常见的场景：你有一个能跑的环境（机器人、游戏、模拟器），可以执行动作、观察反馈，但$P(s'|s,a)$和$R(s,a)$的解析形式不知道。
+
+\textbf{最朴素的对策}：跑很多次，对每个状态出现时的累积回报取样本均值——这就是Monte Carlo方法。
+
+它是bandit最直接的MDP版本：把"拉一次得到$r$"换成"跑完一个episode得到$G_t$"，剩下全靠大数定律。
+\end{plainwords}
+
+\subsection{Bandit的直接推广}
+
+\begin{intuition}[把状态当成"轨迹老虎机"]
+上周bandit的核心套路：
+\begin{itemize}
+\item 不知道$\mu_a$
+\item 拉臂$a$多次，记录奖励$r$
+\item 用样本均值$\hat\mu_a = \frac{1}{N_a}\sum_{i=1}^{N_a} r_i$估计$\mu_a$
+\item 大数定律 $\Rightarrow$ $\hat\mu_a \to \mu_a$
+\end{itemize}
+
+MDP里把"臂"换成"状态"，"一次奖励"换成"从该状态出发的整段回报$G_t$"：
+\begin{itemize}
+\item 不知道$V^\pi(s)$
+\item 跑$\pi$多次，每次记录从$s$出发观察到的$G_t$
+\item 用样本均值$\hat V(s) = \frac{1}{N_s}\sum_{i} G^{(i)}$估计$V^\pi(s)$
+\end{itemize}
+
+\textbf{大数定律仍然保证收敛}——因为定义上$V^\pi(s) = \mathbb{E}[G_t \mid s_t = s]$，样本均值估期望嘛。
+
+\textbf{这就是Monte Carlo方法。}它和bandit是同一个统计原理，只不过把"瞬时奖励"换成了"未来累积折扣奖励"。
+\end{intuition}
+
+\subsection{MC评估算法（prediction）}
+
+\begin{definition}[首次访问MC评估]
+给定策略$\pi$。运行$K$条完整轨迹：
+\begin{algorithm}[H]
+\caption{First-Visit Monte Carlo评估}
+\begin{algorithmic}[1]
+\State 初始化$V(s) = 0$，访问计数$N(s) = 0$
+\For{episode $k = 1, \ldots, K$}
+    \State 用$\pi$生成完整轨迹$(s_0, a_0, r_0, s_1, a_1, r_1, \ldots, s_T)$
+    \State 计算$G_t = \sum_{j=t}^{T-1} \gamma^{j-t} r_j$对每个$t$
+    \For{每个在该轨迹中\textbf{首次出现}的状态$s$，对应时刻$t$}
+        \State $N(s) \mathrel{+}= 1$
+        \State $V(s) \leftarrow V(s) + \frac{1}{N(s)}\big[G_t - V(s)\big]$
+    \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+更新规则展开等价于增量样本均值：
+\[
+V_n(s) = \frac{1}{n}\sum_{i=1}^n G^{(i)}
+\]
+\end{definition}
+
+\begin{remark}[首次访问 vs 每次访问]
+\textbf{First-visit MC}：一条轨迹里$s$出现多次只用第一次的$G$。样本独立，方差分析干净。
+
+\textbf{Every-visit MC}：$s$每次出现都更新。样本量更大但相关。
+
+两者都w.p.1收敛到$V^\pi$。第一种严格无偏，第二种渐近无偏。实践用every-visit的多（数据利用率高）。
+\end{remark}
+
+\subsection{MC的统计性质}
+
+\begin{theorem}[MC评估的收敛]
+若每个状态$s$被无限次访问，且步长满足$\sum_n \alpha_n = \infty, \sum_n \alpha_n^2 < \infty$（或用$\alpha_n = 1/n$），则
+\[
+V_n(s) \xrightarrow{w.p.1} V^\pi(s)
+\]
+\end{theorem}
+
+\begin{proofidea}
+这\textbf{不是新结果}。$V^\pi(s) = \mathbb{E}[G_t \mid s_t = s]$是定义，$\{G^{(i)}\}$（首次访问版本）是i.i.d.\ 样本，强大数定律即得。
+
+\textbf{MC评估在统计学上就是bandit的样本均值定理在MDP上的复读机版本。}没有新的概率工具，只是把"奖励"重新定义成"未来累积折扣奖励"。
+\end{proofidea}
+
+\begin{calculation}[MC的方差量级]
+单次$G_t$的方差，假设每步奖励方差$\sigma^2$、各步独立（最乐观情形）：
+\[
+\text{Var}(G_t) = \sum_{k=0}^\infty \gamma^{2k}\sigma^2 = \frac{\sigma^2}{1-\gamma^2}
+\]
+$\gamma=0.9 \Rightarrow$ 放大$\approx 5.3$倍；$\gamma=0.99 \Rightarrow$ 放大$\approx 50$倍。
+
+样本均值的标准差是$\sqrt{\text{Var}(G_t)/n}$，要达到精度$\epsilon$需要：
+\[
+n = O\Big(\frac{\sigma^2}{(1-\gamma^2)\epsilon^2}\Big)
+\]
+轨迹。$\gamma$越接近1，常数爆炸。
+
+实际情形（状态转移随机性叠加奖励随机性）方差更大。\textbf{这是MC的根本痛点。}
+\end{calculation}
+
+\subsection{MC control：评估 + 改进的循环}
+
+Prediction解决了，control（找最优$\pi$）怎么办？沿用策略迭代的GPI框架：评估 + greedy改进。
+
+\begin{plainwords}[Model-free control的关键切换：必须学$Q$不学$V$]
+策略迭代的改进步骤：
+\[
+\pi'(s) = \arg\max_a Q^\pi(s,a)
+\]
+如果只有$V^\pi$，model-based下可以算$Q$：
+\[
+Q^\pi(s,a) = R(s,a) + \gamma\sum_{s'} P(s'|s,a)V^\pi(s')
+\]
+——\textbf{这需要$P, R$}！
+
+所以：\textbf{model-free control必须直接估计$Q$，不能只估$V$}。这是从prediction（学$V$就够）跳到control（必须学$Q$）的根本切换点。
+
+记住这个原则——下一章的TD也会撞上同一堵墙，得出同样的结论。
+\end{plainwords}
+
+\begin{algorithm}[H]
+\caption{MC Control（$\epsilon$-greedy版）}
+\begin{algorithmic}[1]
+\State 初始化$Q(s,a)$任意，$\pi = \epsilon$-greedy w.r.t.\ $Q$
+\For{episode $k = 1, 2, \ldots$}
+    \State 用$\pi$生成完整轨迹
+    \State 对每个访问到的$(s,a)$：$Q(s,a) \leftarrow Q(s,a) + \alpha[G - Q(s,a)]$
+    \State $\pi \leftarrow \epsilon$-greedy w.r.t.\ 更新后的$Q$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{remark}[为什么需要$\epsilon$-greedy]
+纯greedy会漏掉好动作——没访问过的$(s,a)$永远没有$Q$估计、永远不会被选中、永远没机会被试。$\epsilon$-greedy保证每个动作都有$\geq \epsilon/|A|$的概率被尝试，对应bandit的\textbf{forced exploration}。
+
+GLIE条件（$\epsilon \to 0$、每个$(s,a)$被无限次访问）下，MC control w.p.1收敛到$Q^*$。
+\end{remark}
+
+\subsection{MC的两个软肋}
+
+MC虽然简单优雅、和bandit理论同源，但有两个严重缺陷：
+
+\begin{keypoint}[MC不适用的场景]
+\begin{enumerate}
+\item \textbf{必须等到episode结束}才能算$G_t$。
+\begin{itemize}
+\item 无限horizon任务（连续运行的工厂控制、未通关的游戏）根本没法用
+\item 即使有限horizon，episode长意味着延迟更新——在线学习效率低
+\end{itemize}
+
+\item \textbf{方差极大}：
+\begin{itemize}
+\item $G_t = r_t + \gamma r_{t+1} + \gamma^2 r_{t+2} + \cdots$是$O(1/(1-\gamma))$步噪声的叠加
+\item Bandit拉一次承担一步随机性，MC拉一次承担一整段
+\item 学习率很难调——大了不稳，小了慢
+\end{itemize}
+\end{enumerate}
+\end{keypoint}
+
+\begin{plainwords}[两条改进路线 = 后面两章]
+MC的两个软肋分别催生了后面两章的主题。
+
+\textbf{软肋1（样本效率低、方差大）$\Rightarrow$ §UCB-VI}：与其暴力 sample-average 整段回报，不如从样本里\textbf{估出模型}$\hat P, \hat R$，再做optimistic planning。把所有样本的信息塞进模型，对每个$(s,a)$都做了"信息共享"——这是\textbf{model-based RL}，能拿到$\tilde O(\sqrt{H^3 SAK})$的regret。
+
+\textbf{软肋2（必须等episode结束）$\Rightarrow$ §时序差分学习}：用\textbf{bootstrap}——一步样本$+$ 自己当前的估计——绕过等待，每步都能更新。保持model-free和online，导出SARSA和Q-learning。
+
+后续这两章请始终回头比较：
+\begin{itemize}
+\item UCB-VI：sample → 估模型 → 计划（每步$O(SA \cdot S)$存储 + planning开销）
+\item TD：sample → 一步bootstrap → 更新$Q$（每步$O(1)$）
+\item MC：sample → 等到底 → 取均值（每步$O(1)$但要等episode）
+\end{itemize}
+三者各自付出不同代价，换不同的好处。
+\end{plainwords}
+
+%=============================================================================
+\section{从Bandit Regret到RL Regret}
+%=============================================================================
+
+\begin{plainwords}[承接上周]
+上周定义的Bandit Regret：$\sum_{t=1}^T (\mu^* - \mu_{a_t})$
+
+MDP的Regret类似，但要考虑\textbf{episode结构}：
+\end{plainwords}
+
+\begin{definition}[Episodic MDP的Regret]
+运行$K$个episode，每个episode长度$H$：
+\[
+\text{Regret}(K) = \sum_{k=1}^K \left[V_1^*(s_1^k) - V_1^{\pi_k}(s_1^k)\right]
+\]
+其中$\pi_k$是第$k$个episode使用的策略。
+\end{definition}
+
+\begin{keypoint}[Bandit vs MDP Regret]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& Bandit & MDP \\
+\midrule
+单轮损失 & $\mu^* - \mu_a$ & $V^*(s) - V^\pi(s)$ \\
+累积 & $T$轮 & $K$个episode \\
+最优界 & $O(\sqrt{KT})$ & $O(\sqrt{H^3 SAK})$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+MDP多了$\sqrt{H^3 SA}$因子：状态空间、动作空间、时间范围都增加了探索难度。
+\end{keypoint}
+
+%=============================================================================
+\section{UCB-VI：把UCB推广到MDP}
+%=============================================================================
+
+\begin{plainwords}[相对MC的改进点]
+MC暴力sample-average整段回报，样本效率低。UCB-VI走另一条路：从样本里\textbf{估出模型}$\hat P, \hat R$，再做optimistic planning。
+\begin{itemize}
+\item MC：每个$(s,a)$的回报\textbf{独立估计}，信息不共享
+\item UCB-VI：所有样本\textbf{都塞进模型}$\hat P, \hat R$里，不同$(s,a)$通过planning共享信息
+\end{itemize}
+代价：要存$O(S^2 A)$的转移计数表 + 每个episode跑一次值迭代。回报：$\tilde O(\sqrt{H^3 SAK})$ regret，远优于MC的样本复杂度。
+
+下面具体看怎么做。
+\end{plainwords}
+
+\begin{plainwords}[核心思想]
+上周的UCB：$\hat{\mu}_a + \sqrt{\frac{2\ln t}{n_a}}$（均值 + 不确定性bonus）
+
+UCB-VI的思想完全一样：对不确定的\textbf{转移概率}，假设它们对我们\textbf{有利}。
+
+具体做法：在值迭代中，给Q值加一个bonus，bonus大小与$(s,a)$的访问次数成反比。
+\end{plainwords}
+
+\begin{example}[UCB-VI的生活版——探索新城市]
+你刚搬到一个新城市，想找最好的生活方式。
+
+\textbf{状态}：你在哪个街区
+
+\textbf{动作}：去哪个餐厅/商店/公园
+
+\textbf{问题}：你不知道每个地方有多好，也不知道去了之后会遇到什么（转移概率）。
+
+\textbf{UCB-VI策略}：
+\begin{enumerate}
+    \item 对每个没去过的地方，\textbf{乐观假设}它很棒（给高分）
+    \item 去过几次的地方，根据经验评分，但加一个"不确定性bonus"
+    \item 去过很多次的地方，bonus很小，评分接近真实
+\end{enumerate}
+
+\textbf{效果}：
+\begin{itemize}
+    \item 一开始疯狂探索（所有地方bonus都高）
+    \item 慢慢bonus降低，开始exploitation
+    \item 最终找到最好的生活方式
+\end{itemize}
+
+\textbf{和上周UCB的区别}：
+\begin{itemize}
+    \item UCB：只考虑"这个餐厅有多好"
+    \item UCB-VI：还要考虑"去完这个餐厅，我会到哪个状态，那个状态有多好"
+\end{itemize}
+\end{example}
+
+\begin{algorithm}[H]
+\caption{UCB-VI（完整版）}
+\begin{algorithmic}[1]
+\State 初始化计数$N(s,a) = 0$，$N(s,a,s') = 0$
+\For{episode $k = 1, 2, \ldots, K$}
+    \State \textbf{// 乐观值迭代（从后往前）}
+    \State $V_{H+1}(s) = 0$ for all $s$
+    \For{$h = H, H-1, \ldots, 1$}
+        \For{each $(s, a)$}
+            \If{$N(s,a) > 0$}
+                \State $\hat{P}(s'|s,a) = N(s,a,s') / N(s,a)$
+                \State $\text{bonus}_h(s,a) = c\sqrt{\frac{H^2 \iota}{N(s,a)}}$ where $\iota = \ln(SAH K/\delta)$
+            \Else
+                \State $\text{bonus}_h(s,a) = H$ \Comment{最大可能值}
+            \EndIf
+            \State $Q_h(s,a) = \min\left\{H, R(s,a) + \sum_{s'} \hat{P}(s'|s,a) V_{h+1}(s') + \text{bonus}_h(s,a)\right\}$
+        \EndFor
+        \State $V_h(s) = \max_a Q_h(s,a)$, \quad $\pi_h^k(s) = \arg\max_a Q_h(s,a)$
+    \EndFor
+    \State \textbf{// 执行策略并收集数据}
+    \State 从$s_1^k$出发，执行$\pi^k$，观察轨迹$(s_1, a_1, r_1, \ldots, s_H, a_H, r_H)$
+    \State 更新计数：$N(s_h, a_h) \mathrel{+}= 1$，$N(s_h, a_h, s_{h+1}) \mathrel{+}= 1$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{UCB-VI的Regret分析}
+
+\begin{theorem}[UCB-VI的Regret界]
+以概率至少 $1-\delta$，有
+\[
+\operatorname{Regret}(K)
+=
+\sum_{k=1}^K
+\left[
+V_1^*(s_1^k)-V_1^{\pi^k}(s_1^k)
+\right]
+\leq
+O\left(\sqrt{H^3SAK\iota}\right),
+\]
+其中
+\[
+\iota=\ln(SAHK/\delta).
+\]
+\end{theorem}
+
+\begin{proof}
+证明分四步。
+
+\textbf{Step 1：建立好事件}
+
+定义好事件 $\mathcal{E}$：对所有 $(s,a,h,k)$，经验转移概率的误差均被 bonus 控制，即
+\[
+\left|
+\sum_{s'}
+\left(
+\hat P^k(s'|s,a)-P(s'|s,a)
+\right)
+V_{h+1}^k(s')
+\right|
+\leq
+\operatorname{bonus}_h^k(s,a),
+\]
+其中
+\[
+\operatorname{bonus}_h^k(s,a)
+=
+c\sqrt{
+\frac{H^2\iota}{N^k(s,a)\vee 1}
+}.
+\]
+这里 \(N^k(s,a)\) 表示在 episode \(k\) 开始前，状态动作对 \((s,a)\) 被访问的总次数。注意这里的计数不依赖于 \(h\)。
+
+\begin{lemma}[好事件成立]
+选择足够大的常数 $c$，有
+\[
+\mathbb{P}(\mathcal{E})\geq 1-\delta.
+\]
+\end{lemma}
+
+\begin{proof}[引理证明]
+固定 $(s,a,h,k)$。设在 episode \(k\) 开始前，\((s,a)\) 已经被访问了
+\[
+n=N^k(s,a)
+\]
+次。由于 \(V_{h+1}^k(s')\in[0,H]\)，由 Hoeffding 不等式，
+\[
+\mathbb{P}
+\left(
+\left|
+\sum_{s'}
+(\hat P^k-P)(s'|s,a)
+V_{h+1}^k(s')
+\right|
+>
+\epsilon
+\right)
+\leq
+2\exp\left(
+-\frac{2n\epsilon^2}{H^2}
+\right).
+\]
+取
+\[
+\epsilon
+=
+c\sqrt{\frac{H^2\iota}{n\vee 1}},
+\]
+则失败概率至多为
+\[
+2\exp(-2c^2\iota)
+\leq
+\frac{\delta}{SAHK},
+\]
+其中最后一步可通过选择足够大的常数 \(c\) 保证。
+
+对所有 $(s,a,h,k)$ 作 union bound，得到
+\[
+\mathbb{P}(\mathcal{E})\geq 1-\delta.
+\]
+\end{proof}
+
+\textbf{Step 2：乐观性}
+
+\begin{lemma}[乐观引理]
+在好事件 $\mathcal{E}$ 下，对所有 $(s,h,k)$，有
+\[
+V_h^k(s)\geq V_h^*(s).
+\]
+\end{lemma}
+
+\begin{proof}[引理证明]
+对 $h$ 从 $H+1$ 到 $1$ 作反向归纳。
+
+当 \(h=H+1\) 时，
+\[
+V_{H+1}^k(s)=0=V_{H+1}^*(s).
+\]
+
+假设对 \(h+1\) 有
+\[
+V_{h+1}^k(s)\geq V_{h+1}^*(s).
+\]
+则对任意 $(s,a)$，
+\begin{align*}
+Q_h^k(s,a)
+&=
+R(s,a)
++
+\sum_{s'}\hat P^k(s'|s,a)V_{h+1}^k(s')
++
+\operatorname{bonus}_h^k(s,a)
+\\
+&\geq
+R(s,a)
++
+\sum_{s'}P(s'|s,a)V_{h+1}^k(s')
+\\
+&\geq
+R(s,a)
++
+\sum_{s'}P(s'|s,a)V_{h+1}^*(s')
+\\
+&=
+Q_h^*(s,a).
+\end{align*}
+第一处不等式使用了好事件，第二处不等式使用了归纳假设。
+
+因此
+\[
+V_h^k(s)
+=
+\max_a Q_h^k(s,a)
+\geq
+\max_a Q_h^*(s,a)
+=
+V_h^*(s).
+\]
+归纳完成。
+\end{proof}
+
+\textbf{Step 3：Regret分解}
+
+由乐观性，
+\begin{align*}
+\operatorname{Regret}(K)
+&=
+\sum_{k=1}^K
+\left[
+V_1^*(s_1^k)-V_1^{\pi^k}(s_1^k)
+\right]
+\\
+&\leq
+\sum_{k=1}^K
+\left[
+V_1^k(s_1^k)-V_1^{\pi^k}(s_1^k)
+\right].
+\end{align*}
+
+下面分析单个 episode 中
+\[
+V_1^k(s_1^k)-V_1^{\pi^k}(s_1^k)
+\]
+的大小。
+
+\begin{lemma}[单episode分解]
+在好事件 $\mathcal{E}$ 下，对每个 episode \(k\)，有
+\[
+V_1^k(s_1^k)-V_1^{\pi^k}(s_1^k)
+\leq
+\sum_{h=1}^H
+\left[
+2\operatorname{bonus}_h^k(s_h^k,a_h^k)
++
+\xi_h^k
+\right],
+\]
+其中 \(\xi_h^k\) 是鞅差序列。
+\end{lemma}
+
+\begin{proof}[引理证明]
+定义
+\[
+\delta_h^k(s)
+=
+V_h^k(s)-V_h^{\pi^k}(s).
+\]
+在 episode \(k\) 的真实轨迹上，记
+\[
+\delta_h^k
+=
+\delta_h^k(s_h^k).
+\]
+
+由于策略 \(\pi^k\) 在第 \(h\) 步选择
+\[
+a_h^k=\arg\max_a Q_h^k(s_h^k,a),
+\]
+有
+\begin{align*}
+\delta_h^k
+&=
+V_h^k(s_h^k)-V_h^{\pi^k}(s_h^k)
+\\
+&=
+Q_h^k(s_h^k,a_h^k)
+-
+\left[
+R(s_h^k,a_h^k)
++
+\sum_{s'}P(s'|s_h^k,a_h^k)
+V_{h+1}^{\pi^k}(s')
+\right]
+\\
+&=
+\sum_{s'}
+\hat P^k(s'|s_h^k,a_h^k)V_{h+1}^k(s')
+-
+\sum_{s'}
+P(s'|s_h^k,a_h^k)V_{h+1}^{\pi^k}(s')
++
+\operatorname{bonus}_h^k(s_h^k,a_h^k).
+\end{align*}
+
+将第一项加减
+\[
+\sum_{s'}P(s'|s_h^k,a_h^k)V_{h+1}^k(s')
+\]
+得到
+\begin{align*}
+\delta_h^k
+&=
+\sum_{s'}
+(\hat P^k-P)(s'|s_h^k,a_h^k)V_{h+1}^k(s')
+\\
+&\quad
++
+\sum_{s'}
+P(s'|s_h^k,a_h^k)
+\left[
+V_{h+1}^k(s')-V_{h+1}^{\pi^k}(s')
+\right]
++
+\operatorname{bonus}_h^k(s_h^k,a_h^k)
+\\
+&\leq
+2\operatorname{bonus}_h^k(s_h^k,a_h^k)
++
+\mathbb{E}
+\left[
+\delta_{h+1}^k(s_{h+1}^k)
+\mid
+s_h^k,a_h^k
+\right],
+\end{align*}
+其中最后一步使用了好事件。
+
+定义鞅差
+\[
+\xi_h^k
+=
+\delta_{h+1}^k(s_{h+1}^k)
+-
+\mathbb{E}
+\left[
+\delta_{h+1}^k(s_{h+1}^k)
+\mid
+s_h^k,a_h^k
+\right].
+\]
+于是
+\[
+\mathbb{E}
+\left[
+\delta_{h+1}^k(s_{h+1}^k)
+\mid
+s_h^k,a_h^k
+\right]
+=
+\delta_{h+1}^k(s_{h+1}^k)-\xi_h^k.
+\]
+因此
+\[
+\delta_h^k
+\leq
+2\operatorname{bonus}_h^k(s_h^k,a_h^k)
++
+\delta_{h+1}^k(s_{h+1}^k)
+-
+\xi_h^k.
+\]
+
+将上式从 \(h=1\) 递推到 \(H\)，并利用
+\[
+\delta_{H+1}^k=0,
+\]
+得到
+\[
+\delta_1^k
+\leq
+\sum_{h=1}^H
+\left[
+2\operatorname{bonus}_h^k(s_h^k,a_h^k)
+-
+\xi_h^k
+\right].
+\]
+由于 \(-\xi_h^k\) 仍然是鞅差项，为了记号简洁，重新记作 \(\xi_h^k\)，得到
+\[
+\delta_1^k
+\leq
+\sum_{h=1}^H
+\left[
+2\operatorname{bonus}_h^k(s_h^k,a_h^k)
++
+\xi_h^k
+\right].
+\]
+\end{proof}
+
+\textbf{Step 4：累积bonus的界}
+
+由 Step 3，
+\[
+\operatorname{Regret}(K)
+\leq
+2\sum_{k=1}^K\sum_{h=1}^H
+\operatorname{bonus}_h^k(s_h^k,a_h^k)
++
+\sum_{k=1}^K\sum_{h=1}^H
+\xi_h^k.
+\]
+
+首先处理鞅差项。由于
+\[
+|\xi_h^k|\leq H,
+\]
+由 Azuma-Hoeffding 不等式，以高概率有
+\[
+\left|
+\sum_{k=1}^K\sum_{h=1}^H
+\xi_h^k
+\right|
+\leq
+O\left(H\sqrt{HK\iota}\right).
+\]
+
+下面处理 bonus 项。由定义，
+\[
+\sum_{k=1}^K\sum_{h=1}^H
+\operatorname{bonus}_h^k(s_h^k,a_h^k)
+=
+cH\sqrt{\iota}
+\sum_{k=1}^K\sum_{h=1}^H
+\frac{1}{
+\sqrt{N^k(s_h^k,a_h^k)\vee 1}
+}.
+\]
+
+对每个固定的 \((s,a)\)，设它在所有 \(K\) 个 episode 中总共被访问了
+\[
+n(s,a)
+\]
+次，并把这些访问时刻依次记为
+\[
+t_1,t_2,\ldots,t_{n(s,a)}.
+\]
+在第 \(i\) 次访问时，有
+\[
+N^k(s,a)=i-1.
+\]
+因此
+\[
+\sum_{i=1}^{n(s,a)}
+\frac{1}{\sqrt{(i-1)\vee 1}}
+\leq
+1+\sum_{i=1}^{n(s,a)-1}\frac{1}{\sqrt{i}}
+\leq
+2\sqrt{n(s,a)}.
+\]
+
+于是
+\begin{align*}
+\sum_{k=1}^K\sum_{h=1}^H
+\frac{1}{
+\sqrt{N^k(s_h^k,a_h^k)\vee 1}
+}
+&\leq
+\sum_{s,a}2\sqrt{n(s,a)}
+\\
+&\leq
+2\sqrt{SA}
+\sqrt{\sum_{s,a}n(s,a)}
+\\
+&=
+2\sqrt{SA}
+\sqrt{HK}
+\\
+&=
+2\sqrt{SAHK}.
+\end{align*}
+其中第二步使用 Cauchy-Schwarz，不再对 \(h\) 分桶；并且
+\[
+\sum_{s,a}n(s,a)=HK.
+\]
+
+因此
+\[
+\sum_{k=1}^K\sum_{h=1}^H
+\operatorname{bonus}_h^k(s_h^k,a_h^k)
+\leq
+O\left(
+H\sqrt{SAHK\iota}
+\right)
+=
+O\left(
+\sqrt{H^3SAK\iota}
+\right).
+\]
+
+综上，
+\begin{align*}
+\operatorname{Regret}(K)
+&\leq
+O\left(
+\sqrt{H^3SAK\iota}
+\right)
++
+O\left(
+H\sqrt{HK\iota}
+\right).
+\end{align*}
+当 \(SA\geq 1\) 时，第一项主导，因此
+\[
+\operatorname{Regret}(K)
+\leq
+O\left(
+\sqrt{H^3SAK\iota}
+\right).
+\]
+证明完成。
+\end{proof}
+
+\begin{calculation}[UCB-VI Regret数值验证]
+$|S|=100$，$|A|=4$，$H=20$，$K=10000$，$\delta=0.05$：
+
+$\iota = \ln(100 \times 4 \times 20 \times 10000 / 0.05) = \ln(1.6 \times 10^9) \approx 21$
+
+$\text{Regret} \leq c\sqrt{20^3 \times 100 \times 4 \times 10000 \times 21}$
+
+$= c\sqrt{8000 \times 400 \times 10000 \times 21} = c\sqrt{6.72 \times 10^{11}} \approx 820000 \cdot c$
+
+取$c = 1$（实际常数更小），平均每episode Regret $\approx 82$。
+
+实际中Regret通常比理论界小5-10倍。
+\end{calculation}
+
+\subsection{Regret下界}
+
+\begin{theorem}[信息论下界]
+存在MDP使得任何算法的期望Regret至少：
+\[
+\mathbb{E}[\text{Regret}(K)] \geq \Omega(\sqrt{H S A K})
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{构造困难实例}：
+
+考虑"链式MDP"：
+\begin{itemize}
+    \item $S$个状态排成一条链：$s_1 \to s_2 \to \cdots \to s_S$
+    \item 每个状态有$A$个动作
+    \item 只有一个"正确"动作能前进，其他动作原地不动
+    \item 正确动作是随机选的（算法不知道）
+    \item 到达$s_S$获得奖励1，否则为0
+\end{itemize}
+
+\textbf{分析}：
+
+要到达$s_S$，必须在\textbf{每个}状态$s_i$找到正确动作。
+
+在状态$s_i$，需要$\Omega(A)$次尝试才能找到正确动作（每个动作概率$1/A$）。
+
+总共需要$\Omega(SA)$次探索才能学会完整策略。
+
+在探索期间，每个episode的期望Regret是$\Omega(1)$（因为很可能到不了$s_S$）。
+
+设探索需要$T$个episode，则Regret $\geq \Omega(T)$。
+
+但我们也需要$T \cdot H$次转移来完成探索。每次转移最多给一个$(s,a)$提供信息。
+
+要区分每个$(s,a)$是否"正确"，由上周的信息论下界，需要$\Omega(1)$次访问。
+
+总共需要$\Omega(SA)$次访问，即$T \cdot H \geq \Omega(SA)$，所以$T \geq \Omega(SA/H)$。
+
+但这还不够紧。更精细的分析：
+
+\textbf{关键洞察}：在$K$个episode中，每个$(s,a,h)$的访问次数约为$K/(SA)$（平均分配）。
+
+用上周Lai-Robbins风格的论证：要区分两个相差$\Delta$的分布，需要$\Omega(1/\Delta^2)$样本。
+
+对手可以选择$\Delta = \Theta(1/\sqrt{K/(SA)}) = \Theta(\sqrt{SA/K})$。
+
+此时单个状态的Regret贡献$\approx \Delta \cdot K/(SA) \cdot (SA) = \Delta K = \Theta(\sqrt{SAK})$。
+
+乘以$H$步的误差传播：$\text{Regret} \geq \Omega(\sqrt{HSAK})$。
+\end{proof}
+
+\begin{keypoint}[上界与下界的gap]
+\begin{center}
+\begin{tabular}{l|c}
+\toprule
+界 & Regret \\
+\midrule
+UCB-VI上界 & $\tilde{O}(\sqrt{H^3 SAK})$ \\
+下界 & $\Omega(\sqrt{HSAK})$ \\
+Gap & $H$的指数：$1.5$ vs $0.5$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Gap在$H$上。近年有改进算法达到$\tilde{O}(\sqrt{H^2 SAK})$，但$\sqrt{H}$的gap是否能消除仍是开放问题。
+\end{keypoint}
+
+
+%=============================================================================
+% 新增章节：时序差分学习——从prediction到control
+% 插入位置：§UCB-VI 之后、§Q-learning收敛性 之前
+% 配套修改：原§Q-learning可瘦身，"有模型vs无模型"小节可删（已在此节阐明）
+%=============================================================================
+
+\section{时序差分学习：从prediction到control}
+%=============================================================================
+
+\begin{plainwords}
+回顾迄今为止处理MDP的三条路：
+\begin{itemize}
+\item \textbf{DP（值迭代/策略迭代）}：要$P, R$的解析形式，每步算期望
+\item \textbf{Monte Carlo}：model-free，但要\textbf{等整段episode}才能更新，方差大
+\item \textbf{UCB-VI}：从样本估出$\hat P, \hat R$再planning（model-based，乐观探索）
+\end{itemize}
+
+本节给出第四条路：\textbf{时序差分（Temporal Difference, TD）学习}。它是model-free（像MC）但用\textbf{bootstrap}绕过等待（像DP）：用一步样本$+$当前估计代替整段$G_t$。
+
+\textbf{TD = bandit式样本 + DP式bootstrap}，恰好填上MC和DP之间的空位。
+
+Q-learning和SARSA都不是凭空出现的算法——它们是TD框架在control问题上的两个具体实例，差别只在target里$a'$怎么选（按$\pi$ vs.\ 取$\max$）。
+\end{plainwords}
+
+\subsection{Prediction问题：给定策略，估计价值}
+
+\begin{plainwords}[问题设定]
+固定一个策略$\pi$。我们\textbf{不知道}$P, R$，但可以让$\pi$在环境中跑，观察序列：
+\[
+s_0 \xrightarrow{a_0\sim\pi(\cdot|s_0)} r_0, s_1 \xrightarrow{a_1\sim\pi(\cdot|s_1)} r_1, s_2 \xrightarrow{} \cdots
+\]
+目标：估计$V^\pi(s)$。
+
+注意这\textbf{不是}求最优策略——是给定$\pi$估它的值。术语上区分：
+\begin{itemize}
+\item \textbf{Prediction（评估）}：给$\pi$估$V^\pi$或$Q^\pi$
+\item \textbf{Control（控制）}：找最优$\pi^*$
+\end{itemize}
+本节先讲prediction（更简单、更基础），再过渡到control。
+\end{plainwords}
+
+\begin{keypoint}[估计$V^\pi$的三条路]
+回忆Bellman期望方程：
+\[
+V^\pi(s) = \mathbb{E}_{a\sim\pi}\Big[R(s,a) + \gamma\, \mathbb{E}_{s'\sim P(\cdot|s,a)}[V^\pi(s')]\Big]
+\]
+
+右边有两层期望（动作 + 下一状态），还有$V^\pi$自身的递归。处理这三件事的方式不同，得到三种算法：
+
+\begin{center}
+\begin{tabular}{l|c|c|l}
+\toprule
+方法 & 要$P,R$？ & 用样本？ & 怎么处理$V^\pi$的递归 \\
+\midrule
+DP（策略评估） & 是 & 否 & 用前一轮估计$V_k$（bootstrap） \\
+Monte Carlo & 否 & 是（整段） & \textbf{不递归}，直接用真实$G_t$ \\
+TD(0) & 否 & 是（一步） & 用当前估计$V(s')$（bootstrap） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{两个轴}：是否用样本（vs.\ 解析期望）、是否bootstrap（vs.\ 用真实回报）。DP和TD都bootstrap，DP用期望、TD用样本；MC不bootstrap但用样本。\textbf{TD = bandit式样本 + DP式bootstrap}。
+\end{keypoint}
+
+\subsection{TD(0)：用 bootstrap 替换 $G_t$}
+
+\begin{plainwords}[回顾MC的痛点]
+上一章MC的核心痛点是\textbf{要等}：从$s_t$出发，必须把整段轨迹跑完才能算$G_t$，才能更新$V(s_t)$。
+
+TD的诞生动机就是：能不能不等？\textbf{一步}就更新？
+\end{plainwords}
+
+TD的核心idea极其简单：
+
+\begin{intuition}[Return的递归关系]
+$G_t = r_t + \gamma G_{t+1}$
+
+如果手头已经有$V(s_{t+1})$作为$\mathbb{E}[G_{t+1}|s_{t+1}]$的估计，就可以\textbf{用它代替未知的$G_{t+1}$}：
+\[
+G_t \approx r_t + \gamma V(s_{t+1})
+\]
+
+一步就能更新，不用等到episode结束。这个"用自己的估计替换真值"的动作，就叫\textbf{bootstrap}。
+\end{intuition}
+
+\begin{definition}[TD(0)算法——prediction版]
+观察到$(s_t, a_t, r_t, s_{t+1})$后：
+\[
+\boxed{V(s_t) \leftarrow V(s_t) + \alpha\Big[\underbrace{r_t + \gamma V(s_{t+1})}_{\text{TD target}} - V(s_t)\Big]}
+\]
+
+定义\textbf{TD误差}：$\delta_t := r_t + \gamma V(s_{t+1}) - V(s_t)$。
+
+更新简写为$V(s_t) \leftarrow V(s_t) + \alpha\,\delta_t$。
+\end{definition}
+
+\begin{keypoint}[Bootstrapping的正式定义]
+一个学习算法\textbf{bootstrap}，当且仅当：它的更新目标含\textbf{当前估计的价值函数}$V$或$Q$。
+
+\begin{itemize}
+\item DP（策略评估/值迭代）bootstrap：$V_{k+1}(s) = \mathbb{E}[r + \gamma V_k(s')]$，target里有$V_k$
+\item TD(0) bootstrap：target = $r + \gamma V(s')$，含$V$
+\item MC \textbf{不} bootstrap：target = $G_t$，全是真实奖励，不含$V$
+\end{itemize}
+
+\textbf{Bootstrap是一把双刃剑}：
+\begin{itemize}
+\item \textbf{好处}：一步即可更新（不等episode）；方差降低（不叠加整段噪声）
+\item \textbf{代价}：引入偏差（$V$估计有错，target也错）；和\textbf{函数逼近 + off-policy}组合时会发散（§Deadly Triad）
+\end{itemize}
+
+记住这个定义——后面讨论Deadly Triad、advantage estimation、GAE，"bootstrap"都是核心词。
+\end{keypoint}
+
+\begin{example}[MC vs TD：一个具体轨迹]
+轨迹：$s_0 \to (r_0=1) \to s_1 \to (r_1=2) \to s_2 \to (r_2=4) \to$ 终止。$\gamma=1$。
+
+当前估计：$V(s_0)=10, V(s_1)=5, V(s_2)=3$。$\alpha=0.1$。
+
+\textbf{MC对$s_0$的更新}：
+\begin{itemize}
+\item $G_0 = 1+2+4 = 7$（真实回报）
+\item Target = 7，误差 = $7-10 = -3$
+\item $V(s_0) \leftarrow 10 + 0.1\times(-3) = 9.7$
+\end{itemize}
+
+\textbf{TD(0)对$s_0$的更新}（在看到$s_1$后立刻发生，不等episode结束）：
+\begin{itemize}
+\item Target = $r_0 + \gamma V(s_1) = 1 + 5 = 6$
+\item TD误差 $\delta_0 = 6 - 10 = -4$
+\item $V(s_0) \leftarrow 10 + 0.1\times(-4) = 9.6$
+\end{itemize}
+
+\textbf{两个target不同}：MC用$7$（真实但带$r_1, r_2$的方差），TD用$6$（用$V(s_1)=5$代替了未来——如果这个$5$是准的、target偏差就小，但只承担一步的奖励噪声）。
+\end{example}
+
+\begin{calculation}[为什么TD降方差]
+\[
+\text{Var}(\text{MC target}) = \text{Var}\left(\sum_{k=0}^\infty \gamma^k r_{t+k}\right)
+\]
+\[
+\text{Var}(\text{TD target}) = \text{Var}\big(r_t + \gamma V(s_{t+1})\big)
+\]
+
+只要$V$是个相对稳定的估计，TD target只承担\textbf{一步奖励}的随机性$+$ 一个不太抖的$V$值，方差远小于MC target那个无穷和。
+
+代价：若$V(s_{t+1})$有偏差$b$，TD target有偏差$\gamma b$。
+\textbf{Bias-variance tradeoff——TD($\lambda$)正是要在这个权衡上插值（见后面§TD($\lambda$)）。}
+\end{calculation}
+
+\begin{theorem}[TD(0)收敛性 - Sutton 1988; Dayan 1992]
+表格情形下，若：
+\begin{enumerate}
+\item 所有状态$s$被无限次访问
+\item 学习率满足$\sum_t \alpha_t(s) = \infty$，$\sum_t \alpha_t(s)^2 < \infty$
+\end{enumerate}
+则TD(0)以概率1收敛到$V^\pi$。
+\end{theorem}
+
+\begin{proofidea}
+TD(0)期望更新方向是
+\[
+\mathbb{E}[\delta_t \mid s_t = s] = (T^\pi V)(s) - V(s)
+\]
+其中$T^\pi$是Bellman期望算子——已在§3证明它是$\gamma$-收缩的不动点$V^\pi$。
+
+所以TD(0)是$V_{k+1} = T^\pi V_k$这个DP迭代的\textbf{随机逼近版本}：用样本$(s_t, r_t, s_{t+1})$估计$T^\pi V$。
+
+收敛性证明结构和Q-learning相同（§后面）：收缩算子 + 鞅差噪声 + Robbins-Monro步长 → w.p.1收敛。把Q-learning证明里的$T^*$换成$T^\pi$、$\max_{a'}$换成$\mathbb{E}_{a'\sim\pi}$即可。
+\end{proofidea}
+
+\begin{plainwords}[三种prediction方法的统一视图]
+\begin{center}
+\begin{tabular}{l|l|l|l}
+\toprule
+& Target & 用模型 & 用样本 \\
+\midrule
+DP（策略评估） & $\sum_a \pi(a|s)[R + \gamma\sum_{s'} P V_k(s')]$ & 是 & 否 \\
+MC评估 & $G_t$（完整回报） & 否 & 是 \\
+TD(0) & $r_t + \gamma V(s_{t+1})$ & 否 & 是（一步） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{TD = DP的递归 + MC的样本}。把DP里的"求期望"换成"采样"，把MC里的"完整回报"换成"一步样本+bootstrap"。
+\end{plainwords}
+
+\subsection{从prediction到control：为什么必须学$Q$不学$V$}
+
+Prediction解决了"给定$\pi$估值"。要找最优策略呢？
+
+回忆策略迭代的improvement步骤：
+\[
+\pi'(s) = \arg\max_a Q^\pi(s, a)
+\]
+
+\begin{plainwords}[Model-free control的根本约束]
+要在不知道$P, R$的情况下做策略改进，必须能比较\textbf{不同动作}的好坏：
+\[
+\pi'(s) = \arg\max_a Q(s, a)
+\]
+如果手头只有$V$，想算$Q$需要：
+\[
+Q^\pi(s, a) = R(s, a) + \gamma \sum_{s'} P(s'|s, a) V^\pi(s')
+\]
+——这\textbf{需要$P$和$R$}！
+
+所以：\textbf{model-free control必须直接学$Q$，不学$V$}。这是从prediction（学$V$就够）到control（必须学$Q$）的根本驱动力。
+\end{plainwords}
+
+把TD(0)从$V$推广到$Q$。需要的样本变为五元组$(s_t, a_t, r_t, s_{t+1}, a_{t+1})$（多了"下一步动作"）：
+
+\begin{definition}[TD(0) for $Q$]
+\[
+Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha\big[r_t + \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)\big]
+\]
+\end{definition}
+
+\textbf{这里$a_{t+1}$从哪来？}这个看似平凡的选择，决定了你得到的是on-policy还是off-policy算法。两个不同的答案对应SARSA和Q-learning。
+
+\subsection{SARSA：on-policy TD control}
+
+\begin{definition}[SARSA]
+名字来自更新所用的五元组：$(s_t, a_t, r_t, s_{t+1}, a_{t+1})$。
+\begin{algorithm}[H]
+\caption{SARSA}
+\begin{algorithmic}[1]
+\State 初始化$Q(s,a)$任意
+\State 在$s_0$用$\epsilon$-greedy（基于当前$Q$）选$a_0$
+\For{每步$t$}
+    \State 执行$a_t$，观察$r_t, s_{t+1}$
+    \State 在$s_{t+1}$用$\epsilon$-greedy选$a_{t+1}$
+    \State $Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha[r_t + \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)]$
+    \State $t \leftarrow t+1$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+关键：$a_{t+1}$是\textbf{即将真正执行的下一步动作}，按当前behavior policy（$\epsilon$-greedy）采样。
+\end{definition}
+
+\begin{keypoint}[SARSA是on-policy的]
+SARSA的TD target里的$a_{t+1}\sim \pi_{\text{behavior}}$——\textbf{产生数据的策略}和\textbf{被评估的策略}是同一个。
+
+所以SARSA学到的$Q$，是当前$\epsilon$-greedy策略本身的$Q^\pi$（其中$\pi$ = $\epsilon$-greedy w.r.t.\ $Q$）。
+
+要让$Q \to Q^*$，必须让$\epsilon \to 0$（\textbf{GLIE}: Greedy in the Limit with Infinite Exploration）：
+\begin{itemize}
+\item 长期$\epsilon \to 0$ ⟹ behavior policy → greedy
+\item 但$\epsilon$下降不能太快，否则探索不充分（条件1失败）
+\item 常用：$\epsilon_t = 1/t$
+\end{itemize}
+\end{keypoint}
+
+\subsection{Q-learning：off-policy TD control}
+
+现在做一个微小但关键的修改：把SARSA target里的$Q(s_{t+1}, a_{t+1})$ 换成$\max_{a'} Q(s_{t+1}, a')$。
+
+\begin{definition}[Q-learning]
+\[
+Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha\big[r_t + \gamma \max_{a'} Q(s_{t+1}, a') - Q(s_t, a_t)\big]
+\]
+\end{definition}
+
+\begin{magicbox}[$\max$的语义：off-policy的诞生]
+SARSA的target $Q(s_{t+1}, a_{t+1})$对应\textbf{当前$\epsilon$-greedy策略}的下一步价值——评估的就是行为策略本身。
+
+Q-learning的target $\max_{a'} Q(s_{t+1}, a')$对应一个\textbf{不同的策略}：
+\[
+\pi_{\text{greedy}}(s) = \arg\max_a Q(s, a) \quad (\text{无探索的纯贪婪})
+\]
+但智能体实际\textbf{行动}时仍用$\epsilon$-greedy（必须有探索才能更新所有$(s,a)$）。
+
+\textbf{这就是off-policy的根源}：
+\begin{itemize}
+\item Behavior policy（产生数据）：$\epsilon$-greedy
+\item Target policy（被学习/评估）：greedy
+\item 两者不同 ⟹ off-policy
+\end{itemize}
+
+\textbf{为什么这样做有意义}：Q-learning学到的是$Q^*$（最优策略的Q），与你用什么探索策略\textbf{无关}（前提是所有$(s,a)$都能被访问到）。SARSA要学$Q^*$得让$\epsilon\to 0$；Q-learning直接学$Q^*$，$\epsilon$只影响样本质量、不影响目标。这是Q-learning相对SARSA最大的优势。代价：函数逼近下会触发Deadly Triad（§后面）。
+\end{magicbox}
+
+\begin{keypoint}[SARSA vs Q-learning——同源异果]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& \textbf{SARSA} & \textbf{Q-learning} \\
+\midrule
+TD target & $r + \gamma Q(s', a')$ & $r + \gamma \max_{a'} Q(s', a')$ \\
+$a'$ 怎么选 & 从$\pi_{\text{behavior}}$采样 & 取$\arg\max$ \\
+On/off-policy & on-policy & off-policy \\
+评估的策略 & behavior policy（$\epsilon$-greedy） & greedy policy \\
+学到什么 & $Q^{\pi_{\text{behavior}}}$ & $Q^*$ \\
+何时$\to Q^*$ & 需要GLIE（$\epsilon\to 0$） & 直接收敛（只要访问充分） \\
+表格收敛性 & w.p.1（GLIE下） & w.p.1（Watkins 1992） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+两个算法\textbf{只差一个$\max$}，但语义完全不同——一个是"评估自己（含探索）"，一个是"评估假想的greedy自己"。
+\end{keypoint}
+
+\begin{example}[悬崖行走：on-policy vs off-policy的实际差别]
+经典对比（Sutton \& Barto, Example 6.6）：智能体在网格世界，要从S走到G。地图底部一长条是"悬崖"，掉下去$-100$奖励并送回起点；其他每步$-1$。
+
+\textbf{Q-learning}学到的策略：贴着悬崖边走最短路径（这是$\pi^*$）。但训练过程中智能体按$\epsilon$-greedy行动，所以经常被$\epsilon$的扰动推下悬崖，\textbf{训练期累积奖励反而差}。
+
+\textbf{SARSA}学到的策略：绕远路、远离悬崖。因为SARSA评估的就是$\epsilon$-greedy策略本身——它"知道"自己以后还会随机出错，所以选一条容错率高的路。\textbf{训练期累积奖励高，但学到的策略不是$\pi^*$。}
+
+\textbf{道理}：\textbf{Q-learning假装自己最终会完美，SARSA承认自己永远会犯小错}。两者各有适用场景：要部署时关探索，Q-learning好；要训练中也少出大事故（机器人、医疗），SARSA好。
+\end{example}
+
+\begin{plainwords}[Tabular RL算法的二维分类表]
+现在我们终于可以把表格RL所有算法放在一张图里：
+
+\begin{center}
+\begin{tabular}{l|l|l}
+\toprule
+& \textbf{Prediction（评估$\pi$）} & \textbf{Control（找$\pi^*$）} \\
+\midrule
+\textbf{DP}（要模型） & 策略评估 & 值迭代 / 策略迭代 \\
+\textbf{MC}（无模型、不bootstrap） & MC评估 & MC control + $\epsilon$-greedy \\
+\textbf{TD on-policy} & TD(0) on $V$ & \textbf{SARSA} \\
+\textbf{TD off-policy} & 重要性采样TD & \textbf{Q-learning} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{记忆要点}：
+\begin{itemize}
+\item 横轴：估值 vs 找最优
+\item 纵轴：怎么处理期望（解析 / 整段样本 / 一步样本+bootstrap）和on/off-policy
+\item Q-learning $=$ TD $+$ control $+$ off-policy（$\max$）
+\item SARSA $=$ TD $+$ control $+$ on-policy（按$\pi$采样$a'$）
+\end{itemize}
+
+后面要讲的所有东西都长在这张表上：
+\begin{itemize}
+\item TD($\lambda$)：在TD(0)（一步）和MC（整段）之间用$\lambda$插值
+\item Linear TD/Q：把表格换成$\theta^\top\phi(s)$
+\item Deadly Triad：FA + bootstrap + off-policy组合发散
+\item Advantage function / policy gradient（后续课）：TD误差$\delta_t$恰是advantage $A^\pi(s_t,a_t)$的无偏估计
+\item Deep RL的DQN：Q-learning + 神经网络 + replay buffer + target network
+\end{itemize}
+\end{plainwords}
+
+\begin{remark}[术语对照——避免课后混淆]
+不同教材、论文对同一概念叫法不一，列在这里：
+\begin{itemize}
+\item \textbf{Prediction} = policy evaluation = 策略评估
+\item \textbf{Control} = optimization = 找最优策略
+\item \textbf{Bootstrap} = 用估计更新估计（DP和TD都bootstrap，MC不）
+\item \textbf{On-policy}：target policy = behavior policy
+\item \textbf{Off-policy}：target policy $\neq$ behavior policy
+\item \textbf{TD error} $\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$（或Q版本）
+\item \textbf{TD target} $= r_t + \gamma V(s_{t+1})$（TD误差里$V(s_t)$之外的部分）
+\end{itemize}
+\end{remark}
+
+%=============================================================================
+% 下一节：§Q-learning收敛性（原§8，可瘦身——
+% 删去"有模型vs无模型"的1.5页（已在本节阐明）、"试错学习"那段比喻、
+% 只保留：算法伪码（已在本节有）、Watkins-Jaakkola定理 + 证明）
+%=============================================================================
+
+%=============================================================================
+\section{核心概念与工程技巧：on/off-policy、经验回放、目标网络}
+%=============================================================================
+
+\begin{plainwords}
+到这里我们已经见过一个不小的算法动物园：值迭代、策略迭代、MC、UCB-VI、TD(0)、SARSA、Q-learning。它们看起来五花八门，但其实坐在同一个低维空间里——只要找对了坐标轴。
+
+本节做两件事：
+
+\textbf{(1) 概念坐标}。给出区分RL算法的三个最重要维度：
+\begin{itemize}
+\item \textbf{model-based vs model-free}（要不要$P, R$）——前几节的主线
+\item \textbf{on-policy vs off-policy}（执行的策略 = 评估的策略 吗）
+\item \textbf{online vs offline}（边交互边学 vs 只用历史数据）
+\end{itemize}
+
+\textbf{(2) 三件工程套件}。介绍把上面算法做"实战"的三个核心技巧：
+\begin{itemize}
+\item \textbf{经验回放（experience replay）}——让 online 算法重复消化样本
+\item \textbf{目标网络（target network）}——让bootstrap稳定
+\item \textbf{重要性采样（importance sampling）}——off-policy的统计桥梁
+\end{itemize}
+
+外加一个常见陷阱：\textbf{Q-learning的过估计偏差}与\textbf{Double Q-learning}。
+
+这些是后面看任何deep RL文献都绕不开的词汇。
+\end{plainwords}
+
+\subsection{On-policy vs off-policy：精确定义}
+
+\begin{definition}[Behavior policy 与 target policy]
+任何RL算法在某个时刻都涉及两个策略：
+\begin{itemize}
+\item \textbf{Behavior policy} $\pi_b$：\textbf{产生数据}的策略（"我实际怎么走、观察到了什么"）
+\item \textbf{Target policy} $\pi_t$：\textbf{被学习/评估}的策略（"我想知道哪个策略的价值/我想优化哪个策略"）
+\end{itemize}
+
+\textbf{On-policy}：$\pi_b = \pi_t$（评估和执行是同一个策略）
+
+\textbf{Off-policy}：$\pi_b \neq \pi_t$（用一个策略的数据学习另一个策略）
+\end{definition}
+
+\begin{example}[把已学算法摆进去]
+\begin{center}
+\begin{tabular}{l|c|c|l}
+\toprule
+算法 & $\pi_b$ & $\pi_t$ & 是哪一种 \\
+\midrule
+MC评估 & $\pi$ & $\pi$ & on-policy \\
+MC control & $\epsilon$-greedy & $\epsilon$-greedy & on-policy \\
+SARSA & $\epsilon$-greedy & $\epsilon$-greedy & on-policy \\
+Q-learning & $\epsilon$-greedy & greedy & \textbf{off-policy} \\
+UCB-VI & 乐观greedy & 乐观greedy & on-policy（执行=评估）\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Q-learning成为off-policy的唯一原因}：target里的$\max_{a'} Q(s', a')$对应的是greedy策略（$\pi_t$），与实际行动的$\epsilon$-greedy（$\pi_b$）不同。改成target里按$\pi_b$采样$a'$，立刻变回on-policy（即SARSA）。
+\end{example}
+
+\begin{keypoint}[Off-policy的好处]
+\begin{enumerate}
+\item \textbf{探索与利用解耦}：用充分探索的$\pi_b$产生数据，学到完全greedy的$\pi_t$。最优行为不被探索噪声污染。
+\item \textbf{数据复用}：旧数据（不管由哪个旧策略产生）可以反复利用——这是\textbf{经验回放}的前提
+\item \textbf{演示/示教学习}：可以从人类专家或别的策略的数据中学习
+\item \textbf{多策略并行评估}：用同一份数据同时评估多个候选target policy
+\end{enumerate}
+\end{keypoint}
+
+\begin{keypoint}[Off-policy的代价]
+\begin{enumerate}
+\item \textbf{分布不匹配}：$\pi_b$产生的状态/动作分布$d^{\pi_b} \neq d^{\pi_t}$，朴素估计会有偏。修正工具：重要性采样（下面讲）
+\item \textbf{Bellman最优算子的max带来过估计}（见后§Double Q-learning）
+\item \textbf{和函数逼近 + bootstrap 组合 = Deadly Triad}（见§Linear FA）——deep RL最常踩的坑
+\end{enumerate}
+\end{keypoint}
+
+\subsection{重要性采样：off-policy的统计桥梁}
+
+\begin{plainwords}
+要从$\pi_b$产生的样本估计$\pi_t$下的期望，最干净的统计工具是\textbf{重要性采样（importance sampling, IS）}。
+
+直觉：用比率$\rho = \pi_t/\pi_b$给每个样本加权——被$\pi_b$多观察到的事件权重降低，反之升高。
+\end{plainwords}
+
+\begin{theorem}[重要性采样恒等式]
+\[
+\mathbb{E}_{a \sim \pi_t}[f(a)] = \mathbb{E}_{a \sim \pi_b}\left[\frac{\pi_t(a)}{\pi_b(a)} f(a)\right] = \mathbb{E}_{a \sim \pi_b}[\rho(a) f(a)]
+\]
+前提（覆盖性条件）：$\pi_t(a) > 0 \Rightarrow \pi_b(a) > 0$。
+\end{theorem}
+
+\begin{proof}
+\[
+\mathbb{E}_{a \sim \pi_t}[f(a)] = \sum_a \pi_t(a) f(a) = \sum_a \pi_b(a) \cdot \frac{\pi_t(a)}{\pi_b(a)} f(a) = \mathbb{E}_{a \sim \pi_b}[\rho(a) f(a)]
+\]
+两步代数。
+\end{proof}
+
+\begin{calculation}[多步IS与方差爆炸]
+对$T$步轨迹做off-policy评估，需要乘\textbf{累积似然比}：
+\[
+\rho_{0:T-1} = \prod_{t=0}^{T-1} \frac{\pi_t(a_t|s_t)}{\pi_b(a_t|s_t)}
+\]
+这个连乘让方差呈\textbf{指数爆炸}。若每步$\rho_t \sim$均值1、方差$\sigma^2$，则$\text{Var}(\rho_{0:T-1}) \sim (1+\sigma^2)^T - 1$——这就是为什么纯IS只在短horizon可行。
+\end{calculation}
+
+\begin{magicbox}[Q-learning为什么不需要IS]
+你也许会问：Q-learning是off-policy（$\pi_b = \epsilon$-greedy, $\pi_t = $ greedy），为什么从来没出现似然比？
+
+\textbf{关键}：Q-learning的target $r + \gamma\max_{a'} Q(s', a')$是\textbf{Bellman optimality算子}对$Q$的一步应用，只用到$(s, a, r, s')$这一步转移——\textbf{和产生这个转移的策略无关}（环境dynamics $P, R$不依赖策略）。
+
+所以Q-learning评估的不是某个target policy $\pi_t$的"长期价值"$Q^{\pi_t}$，而是\textbf{最优算子$T^*$的不动点}$Q^*$。这绕开了"用$\pi_b$的轨迹估$\pi_t$的return"那种需要IS校正的设定。
+
+代价：换成了max带来的偏差——见下面的过估计。
+
+这是Q-learning设计上的精妙之处：用\textbf{算子}（关于环境，与策略无关）代替\textbf{轨迹}（依赖策略），完美绕过IS的方差爆炸。
+\end{magicbox}
+
+\subsection{Online vs offline：另一个独立维度}
+
+\begin{definition}[Online vs offline]
+\textbf{Online}：算法在与环境的\textbf{持续交互}中学习。每步执行动作 → 看反馈 → 更新 → 继续执行。
+
+\textbf{Offline}（也叫batch RL）：只有一个\textbf{预先收集好}的数据集$\mathcal D = \{(s_i, a_i, r_i, s'_i)\}_{i=1}^N$。算法不能再与环境交互，全部学习在$\mathcal D$上完成。
+\end{definition}
+
+\begin{keypoint}[Off-policy和offline是不同的轴——最容易混的两个概念]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& \textbf{Online} & \textbf{Offline} \\
+\midrule
+\textbf{On-policy} & SARSA, A2C, PPO & \textbf{不存在}（offline下$\pi_b$固定无法 = $\pi_t$） \\
+\textbf{Off-policy} & Q-learning, DQN, SAC & CQL, IQL, BCQ, Decision Transformer \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+记住：
+\begin{itemize}
+\item \textbf{Online $\neq$ on-policy}：Q-learning是online但off-policy
+\item \textbf{Offline必然off-policy}：数据已固定，无法再用现在的策略采样
+\item \textbf{On-policy + offline = 不存在}（除非定义为supervised learning / 行为克隆）
+\end{itemize}
+\end{keypoint}
+
+\begin{plainwords}[Offline RL的本质困难]
+为什么offline比online难得多？
+
+\textbf{分布偏移（distribution shift）}：你想学的policy $\pi_t$会去$\pi_t$喜欢的状态，但数据集里全是$\pi_b$喜欢的状态。在$\pi_b$从未访问过的$(s, a)$上，$Q$值是\textbf{凭空外推}出来的——而$\max$算子最喜欢挑高估值的那个外推区域，越学越离谱。
+
+Online的Q-learning不怕这个，因为它真去执行$\arg\max$动作、立刻得到环境的反馈纠正。Offline没有这个反馈渠道。
+
+\textbf{对策思路}：让学到的policy"贴近数据分布"——这就是CQL（保守地压低OOD动作的Q值）、IQL（避免显式max操作）、BCQ（限制动作只能从行为分布中选）的共同主线。
+\end{plainwords}
+
+\subsection{经验回放：让 online 算法重复消化样本}
+
+\begin{plainwords}
+TD/Q-learning的"原生"形式：观察一个$(s,a,r,s')$，更新一次，丢掉，再观察下一个。
+
+两个浪费：
+\begin{enumerate}
+\item \textbf{样本只用一次}就丢——但收集样本很贵（特别是真实机器人/医疗/工业过程）
+\item \textbf{相邻样本强相关}（同一轨迹里前后步状态相似），违反随机逼近定理喜欢的i.i.d.假设，让神经网络训练不稳
+\end{enumerate}
+
+\textbf{经验回放（Experience Replay, Lin 1992; Mnih et al.\ 2015）}：把每个观察到的$(s,a,r,s')$存进一个固定大小的buffer，更新时从中随机抽一个mini-batch。一颗样本被反复消化。
+\end{plainwords}
+
+\begin{algorithm}[H]
+\caption{Q-learning with Experience Replay}
+\begin{algorithmic}[1]
+\State 初始化$Q$，replay buffer $\mathcal B = \emptyset$（容量$N$，典型$N=10^6$）
+\For{每步$t$}
+    \State 在$s_t$用$\epsilon$-greedy选$a_t$，执行后观察$r_t, s_{t+1}$
+    \State $\mathcal B \leftarrow \mathcal B \cup \{(s_t, a_t, r_t, s_{t+1})\}$（满了FIFO丢老的）
+    \State 从$\mathcal B$中均匀采样一个mini-batch $B$（典型$|B|=32\sim 256$）
+    \For{$(s, a, r, s') \in B$}
+        \State $Q(s,a) \leftarrow Q(s,a) + \alpha[r + \gamma\max_{a'} Q(s', a') - Q(s,a)]$
+    \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{keypoint}[经验回放为什么有效，以及它的前提]
+\textbf{三个好处}：
+\begin{enumerate}
+\item \textbf{样本复用}：每个$(s,a,r,s')$被使用多次（典型$\sim 8\times$），样本效率近似提升一个数量级
+\item \textbf{去相关}：mini-batch里的样本来自不同时刻、不同episode，近似i.i.d.，更接近随机逼近定理的假设
+\item \textbf{稳定梯度}：mini-batch平均降低梯度方差，让bootstrap更新更稳
+\end{enumerate}
+
+\textbf{关键前提：算法必须是off-policy。}
+
+为什么？buffer里的数据来自\textbf{过去的策略}，按现在的policy可能根本不会做那些动作。on-policy算法（SARSA, PPO）的target要求$a'$按当前$\pi$采样——但你存的是旧$\pi$下的$a'$，分布不对，更新方向有偏。
+
+\textbf{所以经验回放是Q-learning家族的专利，SARSA/PPO没法直接用}。这是on/off-policy差别最实际、最频繁出现的工程后果。
+\end{keypoint}
+
+\begin{example}[Prioritized Experience Replay（PER, Schaul et al.\ 2016）]
+均匀采样把所有样本一视同仁，但有些样本（TD误差大的）更有学习价值——它们意味着"模型当前预测错得厉害"。
+
+\textbf{PER}：按$|\delta_i|$给样本分配采样概率$p_i \propto |\delta_i|^\alpha$，对$|\delta|$大的样本采得更频繁。需要重要性采样权重$w_i \propto (Np_i)^{-\beta}$校正引入的偏差。
+
+\textbf{效果}：典型场景下样本效率再提升$2\sim 4$倍。代价：需要维护sum-tree数据结构，每次update都要重排。
+\end{example}
+
+\subsection{目标网络：bootstrap的稳定化器}
+
+\begin{plainwords}
+Q-learning的target：$r + \gamma\max_{a'} Q(s', a')$。注意target里的$Q$\textbf{和被更新的$Q$是同一个}——你在追一个一直在动的靶子。
+
+表格情形下这不要紧（每步只改一个$(s,a)$）。但用神经网络逼近Q时，一次梯度step会同时影响\textbf{所有}$(s, a)$处的$Q$值，target随之大幅波动，bootstrap的偏差被放大、训练经常发散。
+
+\textbf{目标网络（Target Network, Mnih et al.\ 2015）}：维护一个$Q$的\textbf{滞后副本}$Q_{\text{target}}$，在target里用$Q_{\text{target}}$而不是$Q$。
+\end{plainwords}
+
+\begin{definition}[带target network的Q-learning更新]
+\[
+Q(s,a) \leftarrow Q(s,a) + \alpha\Big[r + \gamma\max_{a'} Q_{\text{target}}(s', a') - Q(s,a)\Big]
+\]
+$Q_{\text{target}}$的两种更新方式：
+\begin{itemize}
+\item \textbf{硬更新（hard update）}：每$C$步把$Q_{\text{target}} \leftarrow Q$（DQN原版，$C=10^4$）
+\item \textbf{软更新（Polyak / soft update）}：每步$Q_{\text{target}} \leftarrow (1-\tau)Q_{\text{target}} + \tau Q$（$\tau \approx 0.005$，常用于DDPG、SAC）
+\end{itemize}
+\end{definition}
+
+\begin{intuition}[为什么这样稳定]
+不动的target = 转化成了\textbf{有监督回归}。在硬更新的两次同步之间，$Q_{\text{target}}$固定不动，所以target $r + \gamma\max Q_{\text{target}}(s')$对每个样本是个\textbf{常数}——拟合$Q$向它逼近就是普通的回归问题，神经网络擅长。每过$C$步换一组新的target，再回归一段。
+
+类比：你在调一个PID控制器，但setpoint一直在跳——调起来当然发散。把setpoint每段时间冻住，反而能调进去。
+\end{intuition}
+
+\subsection{Q-learning的过估计偏差与Double Q-learning}
+
+\begin{plainwords}
+Q-learning有一个隐蔽的系统性偏差：\textbf{$Q$值会被高估}。原因是max算子和噪声的相互作用。
+\end{plainwords}
+
+\begin{theorem}[Jensen不等式：max的偏差]
+对随机变量$X_1, \ldots, X_n$，
+\[
+\mathbb{E}\Big[\max_i X_i\Big] \geq \max_i \mathbb{E}[X_i]
+\]
+等号仅在所有$X_i$恒等时成立。\textbf{max是凸函数，noise一过它就变正偏。}
+\end{theorem}
+
+\begin{plainwords}[Q-learning为什么过估计]
+Q-learning的target含$\max_{a'} Q(s', a')$。$Q(s', a')$是带噪声的估计，分解为
+\[
+Q(s', a') = Q^*(s', a') + \varepsilon_{a'},\qquad \mathbb{E}[\varepsilon_{a'}] = 0
+\]
+对noise取max：
+\[
+\max_{a'} Q(s', a') = \max_{a'}\big(Q^*(s', a') + \varepsilon_{a'}\big)
+\]
+取期望，由Jensen：
+\[
+\mathbb{E}\big[\max_{a'} Q(s', a')\big] \geq \max_{a'} Q^*(s', a')
+\]
+即使每个$\varepsilon_{a'}$都零均值，\textbf{被$\max$选中的那个动作的$\varepsilon$倾向于偏正}——因为max偏好挑大噪声的样本。
+
+\textbf{后果}：target被系统性高估 $\to$ $Q$被推高 $\to$ 下次更新更高 $\to$ 一直往上漂，策略对噪声特别敏感，训练有时崩盘。
+\end{plainwords}
+
+\begin{definition}[Double Q-learning, van Hasselt 2010]
+思路：把\textbf{选动作}和\textbf{评估动作}用两个独立的$Q$估计——一个挑出$\arg\max$，另一个给它估值，noise解耦。
+
+维护两个网络$Q_A, Q_B$。每步随机选一个更新：
+\[
+Q_A(s, a) \leftarrow Q_A(s,a) + \alpha\Big[r + \gamma\, Q_B\big(s',\,\arg\max_{a'} Q_A(s', a')\big) - Q_A(s,a)\Big]
+\]
+（再以对称形式更新$Q_B$。）
+
+关键：用$Q_A$\textbf{挑动作}（$\arg\max$），用$Q_B$\textbf{估值}。$Q_B$对$Q_A$挑出来的动作给出\textbf{独立}的估计——max偏差消失，因为max的noise和评估的noise不再相关。
+
+\textbf{Double DQN}（深度版本，Hasselt et al.\ 2016）：用主网络挑动作、target网络估值，几乎免费实现，是DQN系列的标配改进。
+\end{definition}
+
+\subsection{探索策略小结}
+
+\begin{plainwords}
+我们已经见过几种探索方式，放在一起对比：
+\begin{itemize}
+\item \textbf{$\epsilon$-greedy}（MC control, SARSA, Q-learning, DQN）：以$\epsilon$概率随机、$1-\epsilon$概率greedy。简单但不智能（在已经熟悉的状态也乱来）
+\item \textbf{UCB式bonus}（UCB-VI）：把"不确定性"加到价值估计上，引导探索去不熟悉的$(s,a)$。理论好，但需要计数器
+\item \textbf{Boltzmann/softmax}：$\pi(a|s) \propto \exp(Q(s,a)/T)$，温度$T$控制探索强度。比$\epsilon$-greedy更平滑、对Q差异敏感
+\item \textbf{Thompson sampling}（贝叶斯RL）：从$Q$的后验分布采样动作。Bandit上经常打败UCB
+\item \textbf{内在动机/curiosity}（深度RL）：用状态预测误差等"惊讶度"作内在奖励——处理稀疏外部奖励的利器
+\end{itemize}
+
+通用规律：探索越智能（用上更多结构），样本效率越高，但实现复杂度也越高。\textbf{深度RL实际中$\epsilon$-greedy + replay + target net + Double仍是最常见的组合}，简单粗暴管用。
+\end{plainwords}
+
+\subsection{Rollout：把"模拟一段轨迹"独立成一个动词}
+
+\begin{plainwords}
+"Rollout" 这个词本课前面已经用过很多次但没有正式定义。它就是一个简单的动作：
+
+\textbf{Rollout = 从某个状态 $s$ 出发、按某个策略 $\pi$ 跑一段轨迹（真实或想象的），把过程中的奖励/状态/动作收集起来。}
+
+你已经在每个章节里都做过它：
+\begin{itemize}
+\item MC评估：从$s$ rollout 到 episode 结束，记录 $G_t$
+\item TD(0)：从$s$ rollout \textbf{一步}，剩下用 $V(s')$ bootstrap
+\item $n$-step return：从$s$ rollout \textbf{$n$步}，剩下用 $V(s_{t+n})$ bootstrap
+\item UCB-VI 内部的值迭代：在估出来的模型 $\hat P, \hat R$ 上做规划——也是一种 rollout，只不过在估的模型里
+\end{itemize}
+
+Rollout 是 RL 算法的\textbf{基本动作}，独立于"学什么"和"怎么更新"。明确把它当作概念，能更清楚地看 deep RL 论文里 actor、worker、planner 这些角色。
+\end{plainwords}
+
+\begin{keypoint}[Rollout 长度的谱系]
+按 rollout 长度区分 RL 算法：
+\begin{center}
+\begin{tabular}{l|l|l}
+\toprule
+长度 & Target & 算法 \\
+\midrule
+1 步 & $r + \gamma V(s')$ & TD(0), SARSA, Q-learning \\
+$n$ 步 & $\sum_{k=0}^{n-1}\gamma^k r_{t+k} + \gamma^n V(s_{t+n})$ & $n$-step TD, Rainbow DQN \\
+$\lambda$-加权 & $\sum_n (1-\lambda)\lambda^{n-1}G_t^{(n)}$ & TD($\lambda$), GAE \\
+整段 & $G_t$ & MC \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Bias-variance 沿 rollout 长度的谱系}：
+\begin{itemize}
+\item 短 rollout：bootstrap 占比大 → 偏差大（$V$估计不准 target 就不准），方差小（少叠加奖励噪声）
+\item 长 rollout：真实奖励占比大 → 偏差小，方差大
+\item Rollout 长度本质上是一个连续可调的旋钮——TD(λ) 通过 $\lambda$ 平滑控制
+\end{itemize}
+\end{keypoint}
+
+\paragraph{Rollout 在 RL 系统里的四种用途}
+
+\textbf{(1) 数据采集（最基本用法）}
+
+Online RL 标准做法：actor 进程在真实环境里 rollout 收集 $(s, a, r, s')$，喂给 learner 进程更新参数。
+
+\begin{itemize}
+\item \textbf{同步}（A2C, PPO）：一批 actor 同时 rollout 固定步数，然后 learner 一次性更新
+\item \textbf{异步}（A3C, IMPALA, Ape-X, SEED RL）：actor 持续 rollout、learner 持续更新，互不阻塞。需要处理"actor 用的是旧版策略"的 off-policy 校正——IMPALA 的 V-trace 算法是这一线的代表
+\end{itemize}
+
+Deep RL 实际跑起来，rollout 经常占 70\%+ 时间——这是为什么 RL infra 设计的核心常常是"如何高效地并行 rollout"。
+
+\textbf{(2) Decision-time planning（MCTS）}
+
+不是把 rollout 用来训练，而是用来\textbf{在当前状态下做决策}。
+
+Monte Carlo Tree Search (MCTS)：在当前状态 $s$ 要决定动作时，模拟很多次（典型 $\sim 10^3-10^5$ 次）"如果我这么走、对手那么走、..."，每次跑到底（或固定深度后用 $V$ bootstrap），统计每个动作的平均回报，选最好的。
+
+\begin{itemize}
+\item \textbf{AlphaGo}：用神经网络指导 rollout 中的动作选择（policy network），用神经网络对叶节点估值（value network），UCB-style 选展开节点（UCT）
+\item \textbf{AlphaZero / MuZero}：进一步用学到的模型做 rollout（MuZero 甚至不需要环境真实 dynamics，只学一个 latent 模型让 MCTS 在里面跑）
+\end{itemize}
+
+MCTS 的精髓：每个动作的价值估计 = 多次 rollout 的样本均值——这其实是 bandit-style sample average 套了一层 tree 结构。
+
+\textbf{(3) Imaginary rollout（model-based RL）}
+
+学到一个模型 $\hat P, \hat R$ 后，可以在\textbf{模型里} rollout 生成"想象的"经验，喂给标准 model-free 算法。
+
+\begin{itemize}
+\item \textbf{Dyna-Q}（Sutton 1990）：每次真实交互后，从模型里采样 $k$ 步 rollout 也喂给 Q-learning。最早的 model-based + model-free 混血
+\item \textbf{MBPO}（Janner et al.\ 2019）：从 replay buffer 里的真实 $s$ 出发，用学到的模型做\textbf{短 rollout}（避免长期复合误差），把这些 imagined transitions 加进 buffer
+\item \textbf{Dreamer}（Hafner et al.\ 2020）：学一个 latent dynamics 模型，把 rollout 完全放在 latent space 做——计算便宜得多
+\end{itemize}
+
+核心权衡：模型 rollout 越长，复合误差越大（前面 §Simulation Lemma 分析过：$O(1/(1-\gamma)^2)$ 放大）；越短，越接近 model-free。所以现代 MBRL 一般用\textbf{短 rollout + 真实数据混合}。
+
+\textbf{(4) Rollout algorithm（Tesauro \& Galperin 1996; Bertsekas）}
+
+经典的"做一步策略改进"算法：给定 base policy $\pi_b$，要决定在状态 $s$ 做什么。对每个候选动作 $a$：
+\begin{enumerate}
+\item 假定先执行 $a$，然后按 $\pi_b$ rollout 到底
+\item 多次重复，估计 $\hat Q^{\pi_b}(s, a)$（蒙特卡洛样本均值）
+\item 选 $\arg\max_a \hat Q^{\pi_b}(s, a)$
+\end{enumerate}
+
+这等价于把策略迭代的"一步改进"做成 online 蒙特卡洛版本。\textbf{保证}：得到的策略至少和 $\pi_b$ 一样好（策略改进定理）。代价：每决策一次都要做一堆 rollout，慢。
+
+历史上 Tesauro 的 TD-Gammon 系列就是用这个把人类水平的 backgammon 程序做到超人。MCTS 可以看作它的"tree-structured"升级版。
+
+\begin{plainwords}[一句话总结四种用法]
+\begin{itemize}
+\item \textbf{用真实环境 rollout 收集训练数据} → online RL 主流（PPO/DQN/SAC的actor）
+\item \textbf{用 rollout 在决策时刻搜索} → MCTS（AlphaGo 系列）
+\item \textbf{用模型 rollout 生成合成数据} → model-based RL（Dyna/MBPO/Dreamer）
+\item \textbf{用 rollout 做一步策略改进} → Rollout algorithm（经典 Bertsekas 方法）
+\end{itemize}
+
+同一个动作（rollout），放在不同位置就是不同算法家族。
+\end{plainwords}
+
+\begin{example}[一个状态、四种 rollout 用法的对比]
+机械臂抓取任务。当前状态：手在桌面上方某处，眼前有个杯子。
+
+\textbf{(1) 训练数据 rollout}（DQN actor）：执行当前 $\epsilon$-greedy 策略，从这个状态走到 episode 结束，把每步 $(s, a, r, s')$ 塞进 replay buffer。
+
+\textbf{(2) Decision-time rollout}（MCTS）：从这个状态做 $10^4$ 次模拟（在环境模型里），统计每个动作（向左、向右、向下、抓）的平均回报，挑最好的执行。
+
+\textbf{(3) Imaginary rollout}（MBPO）：从 buffer 里采一个真实状态，用学到的 dynamics 模型走 5 步 imaginary trajectory，把这 5 个合成的 transition 也塞进训练 batch。
+
+\textbf{(4) Rollout algorithm}（base policy = "总是向下"）：对每个候选动作 $a$，假定先执行 $a$、然后一直向下，跑 100 次估计 $\hat Q^{\pi_b}(s, a)$，挑最大的 $a$ 执行。每步决策都重新 rollout 一遍。
+
+\textbf{同一个"rollout"动作，承担了完全不同的算法角色}。
+\end{example}
+
+\subsection{其他小技巧速览}
+
+\begin{plainwords}
+还有几个反复出现的小技巧，不像 replay/target net 那么"必备"，但在 deep RL 论文里几乎处处可见。这一节做个速览，方便后面读论文时不发懵。
+\end{plainwords}
+
+\paragraph{(1) $n$-step return：1-step TD 和 MC 之间的可调节插值}
+
+回忆 TD(0) 的 target 是 $r_t + \gamma V(s_{t+1})$（一步真实奖励 + 一步 bootstrap），MC 的 target 是 $G_t = \sum_{k=0}^\infty \gamma^k r_{t+k}$（全部真实奖励）。$n$-step 就在中间插值：
+\[
+G_t^{(n)} = \underbrace{\sum_{k=0}^{n-1} \gamma^k r_{t+k}}_{\text{$n$步真实奖励}} + \underbrace{\gamma^n V(s_{t+n})}_{\text{$n$步后 bootstrap}}
+\]
+对应的更新：$V(s_t) \leftarrow V(s_t) + \alpha\big[G_t^{(n)} - V(s_t)\big]$。
+
+\textbf{偏差-方差权衡}：$n$ 大 → 接近 MC，方差大偏差小；$n$ 小 → 接近 TD(0)，偏差大方差小。实践中 $n = 3 \sim 5$ 常常比 1-step 好（Rainbow DQN 用 $n=3$）。更优雅的版本是后面 §TD($\lambda$) 的 $\lambda$-weighted 平均——所有 $n$ 加权混合。
+
+\paragraph{(2) Reward 标准化与 clipping}
+
+不同任务奖励量级差异巨大：CartPole 每步 $+1$，Atari 单关可上千分，机械臂任务奖励可能在 $[-100, 0]$。神经网络（特别是带 Adam 优化器的）对输入/输出尺度敏感，奖励量级直接影响 Q 值量级、TD 误差量级、梯度量级。
+
+\textbf{常见做法}：
+\begin{itemize}
+\item \textbf{Running normalization}：维护 $r$ 的滑动 mean / std，用 $(r - \mu)/\sigma$ 喂给网络
+\item \textbf{Reward clipping}：DQN 在 Atari 上用 $\text{sign}(r) \in \{-1, 0, 1\}$ 暴力 clip——丢失幅度信息，但保留了"好/坏/无"
+\item \textbf{Return normalization}（PPO 等）：归一化 $G_t$ 而非单步 $r$
+\end{itemize}
+
+\textbf{副作用}：reward clipping 可能扭曲最优策略（10分和100分的区别消失了）。当不同动作的奖励差别在量级上很重要时不要 clip。
+
+\paragraph{(3) Gradient clipping}
+
+TD 误差偶尔会出现 outlier（比如刚开始训练时，或遇到罕见但高奖励的样本），导致梯度突然爆炸、把网络打飞。
+
+\textbf{标准对策}：clip 梯度的 $\ell_2$ 范数：
+\[
+\nabla \leftarrow \nabla \cdot \min\Big(1,\, \frac{c}{\|\nabla\|_2}\Big)
+\]
+典型 $c = 0.5 \sim 10$。几乎所有 deep RL 实现都默认开启。
+
+\paragraph{(4) Huber loss：Q-learning 的鲁棒损失}
+
+Q-learning 的标准 MSE loss 在大 TD 误差处会有过大梯度（$\nabla = 2 \delta$），加剧 outlier 的破坏。
+
+\textbf{Huber loss}（DQN 标配）：
+\[
+L_\kappa(\delta) = \begin{cases} \tfrac{1}{2}\delta^2 & |\delta| \le \kappa \\ \kappa(|\delta| - \tfrac{\kappa}{2}) & |\delta| > \kappa \end{cases}
+\]
+小误差处像 MSE（光滑、梯度精确），大误差处像 MAE（梯度有界，鲁棒）。典型 $\kappa = 1$。
+
+\paragraph{(5) Dueling 架构：$Q = V + A$ 分头学}
+
+很多状态下"做哪个动作都差不多"——这时只学 $V(s)$ 就够，每个 $Q(s, a)$ 单独学浪费样本。
+
+\textbf{Dueling DQN（Wang et al.\ 2016）}：网络分两个 head，分别输出 $V(s; \theta_v)$ 和 advantage $A(s, a; \theta_a)$，组合：
+\[
+Q(s, a; \theta) = V(s; \theta_v) + \Big(A(s, a; \theta_a) - \frac{1}{|\mathcal{A}|}\sum_{a'} A(s, a'; \theta_a)\Big)
+\]
+减均值是为了 identifiability（否则 $V$ 和 $A$ 间能差一个任意常数）。在动作数大、很多状态下动作选择不敏感的任务（Atari 大部分游戏）效果显著。
+
+（这个架构和后面 §Linear FA 的 advantage 概念也呼应：$A^\pi(s,a) = Q^\pi(s,a) - V^\pi(s)$，TD 误差 $\delta$ 是它的无偏估计。）
+
+\paragraph{(6) 熵正则化：在 loss 里鼓励策略保持随机}
+
+\textbf{动机}：deterministic 策略 → 探索停止 → 容易陷入局部最优。
+
+\textbf{做法}：在 loss 里加 $-\beta\, H(\pi(\cdot|s))$，其中 $H(\pi) = -\sum_a \pi(a|s)\log\pi(a|s)$ 是策略熵。$\beta$ 控制随机性强度。
+
+\begin{itemize}
+\item \textbf{A2C/PPO}：加一个小系数（$\beta \sim 0.01$）的熵 bonus 防止过早收敛
+\item \textbf{SAC（Soft Actor-Critic）}：把它做到极致——目标是最大化 \textbf{奖励 + $\alpha$·策略熵}，称为"最大熵 RL"。这等价于把策略当作 Bellman 软算子的不动点；理论上很优雅
+\end{itemize}
+
+熵正则化的副作用：最优策略不是原 MDP 的最优策略（多了一个熵项），但在 $\beta \to 0$ 极限下重合。SAC 还有 auto-tuning $\alpha$ 的版本。
+
+\paragraph{(7) Hindsight Experience Replay（HER）：稀疏奖励的救星}
+
+稀疏奖励（只在最终成功时才有 $+1$，其他全 $0$）是 RL 的克星——绝大多数 trajectory 都拿 $0$ 奖励，几乎学不到东西。
+
+\textbf{HER（Andrychowicz et al.\ 2017）思路}：失败的轨迹也可以当作"达成了另一个目标"的成功轨迹。
+
+\textbf{具体做法}（goal-conditioned 设定下）：
+\begin{itemize}
+\item 原目标 $g$，trajectory 实际终点 $s_T \neq g$ → 失败，奖励全 $0$
+\item Relabel：把目标换成 $g' = s_T$，重新算奖励 → 这个轨迹"达到了"$g'$，变成成功样本！
+\item 把 relabeled 轨迹塞进 buffer，正常 off-policy Q-learning
+\end{itemize}
+
+\textbf{效果}：在机械臂抓取、push、导航等 goal-conditioned 任务上，从"完全学不到"变成"几小时收敛"。
+
+直觉：每次失败都教会你"如何到达 $s_T$"，哪怕 $s_T$ 不是你想去的地方——总有一天 $s_T$ 可能就是某个用户的目标。把环境反馈的信息密度极大化。
+
+\paragraph{(8) Potential-based reward shaping：加先验知识但不毁最优性}
+
+工程上经常想给奖励函数加点 "提示"——比如"靠近目标更好"。但随便加 shaping 会改变最优策略，得不偿失。
+
+\textbf{Potential-based shaping（Ng, Harada \& Russell 1999）}：选一个势函数 $\Phi: S \to \mathbb{R}$，把奖励改成
+\[
+R'(s, a, s') = R(s, a) + \gamma \Phi(s') - \Phi(s)
+\]
+即"势的变化"。
+
+\begin{theorem}[Ng et al.\ 1999]
+Potential-based shaping 后的 MDP 与原 MDP 有\textbf{相同的最优策略}。
+
+证明思路：累加 shaping 项的话，中间项全消掉，只剩 $\gamma^T \Phi(s_T) - \Phi(s_0)$，这是个常数（对所有策略一样），所以最优性不变。但每步的"局部信号"更密集了，学习更快。
+\end{theorem}
+
+\textbf{用法}：把先验知识"哪些状态更接近成功"编码进 $\Phi$——例如导航任务设 $\Phi(s) = -\|s - s_{\text{goal}}\|$。\textbf{保证最优策略不变，但学习速度可能数量级提升。}
+
+\paragraph{(9) 其他点到为止}
+
+\begin{itemize}
+\item \textbf{Distributional RL（C51, QR-DQN, IQN）}：学的不是 $\mathbb E[G_t]$ 而是 $G_t$ 的整个分布。直觉：分布信息比期望多。Atari 上 SOTA 经常用
+\item \textbf{NoisyNet}：把网络参数加可学习噪声，作为 $\epsilon$-greedy 的替代——探索量随训练自动衰减
+\item \textbf{Frame stacking}：Atari 输入是单帧图像（无速度信息），堆叠最近 4 帧 → 网络能感知运动方向。POMDP 的简单粗暴对策
+\item \textbf{Polyak averaging of network weights}：保存训练过程中权重的 EMA 副本作为最终评估模型——通常比最后一步的权重稳定
+\item \textbf{Spectral / Layer normalization}：稳定深度网络训练，layer norm 在 RL 中经常比 batch norm 好（batch norm 假设 i.i.d.，replay 出来的 mini-batch 不严格满足）
+\end{itemize}
+
+\begin{plainwords}[挑技巧的原则]
+不要一上来就把所有技巧都堆上。建议顺序：
+\begin{enumerate}
+\item 先把 baseline 跑通（Q-learning + replay + target net）
+\item 看 loss/Q 是否爆炸 → 加 gradient clipping、Huber
+\item 看奖励量级 → 加 normalization
+\item 看是否陷入局部最优 → 加熵正则化或更聪明的探索
+\item 看是否过估计 → 加 Double
+\item 看是否动作不敏感 → 加 Dueling
+\item 看是否稀疏奖励 → HER 或 shaping
+\item $n$-step、distributional 是锦上添花，先调通基础再上
+\end{enumerate}
+
+\textbf{Deep RL 实战很大程度上就是诊断 + 加这些 trick 的循环}。理论保收敛，工程保不发散。
+\end{plainwords}
+
+\subsection{算法地图：把这一切收进一张表}
+
+\begin{keypoint}[三维分类总览]
+\begin{center}
+\small
+\begin{tabular}{l|c|c|c|l}
+\toprule
+算法 & Model & On/off & On/offline & 关键技巧 \\
+\midrule
+值迭代 & based & — & 不交互 & 直接用$P, R$ \\
+策略迭代 & based & — & 不交互 & 评估 + 改进交替 \\
+MC评估 & free & on & online & 整段$G_t$取均值 \\
+MC control & free & on & online & $\epsilon$-greedy \\
+UCB-VI & based & on & online & 估模型 + 乐观bonus \\
+SARSA & free & on & online & $\epsilon$-greedy + GLIE \\
+Q-learning & free & off & online & $\max$算子 \\
+\midrule
+DQN & free & off & online & 上面三件套（replay + target net + Double） \\
+SAC & free & off & online & + 最大熵 + 双Critic \\
+PPO & free & on & online & 信赖域 / clipping \\
+CQL / IQL / BCQ & free & off & \textbf{offline} & Q值正则 / 避免max / 行为约束 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{读法}：
+\begin{itemize}
+\item Model-based通常占offline好处（不用一直交互），但要假设环境可模拟或模型可学
+\item On-policy算法（SARSA, PPO）天生不能用replay，只能用最近收集的数据
+\item Offline强制off-policy，且需要特殊正则避免OOD问题
+\item \textbf{Q-learning家族}（Q-learning $\to$ DQN $\to$ SAC $\to$ CQL）是一条主线——走off-policy路线，逐渐加上replay、target net、Double、最大熵、保守正则等技巧应对不同场景
+\end{itemize}
+
+后面§Q-learning收敛性还会从理论角度再补一刀（model-based/free的精确分类、深一些的online/offline讨论），与本节互补——本节关心"工程上是什么"，下一节关心"理论上为什么收敛"。
+\end{keypoint}
+
+%=============================================================================
+\section{Q-learning收敛性}
+%=============================================================================
+
+\begin{plainwords}
+值迭代需要知道$P$和$R$。如果不知道呢？
+
+Q-learning：用\textbf{样本}代替期望，在线更新Q值。
+\end{plainwords}
+
+\subsection{有模型 vs 无模型：核心区别}
+
+\begin{plainwords}[什么是"模型"？]
+在RL中，\textbf{环境模型}指两个东西：
+\begin{enumerate}
+    \item \textbf{状态转移概率}$P(s'|s,a)$：在状态$s$做动作$a$，跳到$s'$的概率
+    \item \textbf{奖励函数}$R(s,a)$：在状态$s$做动作$a$，直接获得多少奖励
+\end{enumerate}
+
+\textbf{有模型 vs 无模型}的核心区别：算法更新价值时，是否直接用到$P$和$R$的\textbf{显式数学形式}。
+\end{plainwords}
+
+\begin{keypoint}[重要澄清：Model-Free也需要"访问"环境！]
+很多人误以为"无模型"意味着"什么都不需要知道"。
+
+\textbf{错！}Model-Free方法（如Q-learning）仍然需要：
+\begin{itemize}
+    \item 能够在环境中执行动作
+    \item 观察环境返回的$(r, s')$
+    \item 收集大量交互样本
+\end{itemize}
+
+\textbf{它只是不需要知道$P$和$R$的数学公式}，但它需要把环境当作\textbf{黑盒}来查询。
+
+打个比方：
+\begin{itemize}
+    \item \textbf{Model-Based}：你有一本物理教科书，可以用公式算出球会落在哪
+    \item \textbf{Model-Free Online}：你没有教科书，但你可以反复扔球，观察它落在哪
+    \item 两者都需要"访问"物理世界，只是方式不同
+\end{itemize}
+\end{keypoint}
+
+\begin{keypoint}[更精确的三分类]
+\begin{center}
+\begin{tabular}{l|c|c|c}
+\toprule
+\textbf{方法} & \textbf{需要$P,R$公式} & \textbf{需要在线交互} & \textbf{例子} \\
+\midrule
+Model-Based & \textcolor{red}{\ding{51}} & 可选 & 值迭代、MBPO \\
+Model-Free Online & \textcolor{green}{\ding{55}} & \textcolor{red}{\ding{51}} & Q-learning、PPO \\
+Model-Free Offline & \textcolor{green}{\ding{55}} & \textcolor{green}{\ding{55}} & CQL、IQL、Decision Transformer \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Offline RL}（也叫Batch RL）才是"真正的无模型"：
+\begin{itemize}
+    \item 不需要$P$和$R$的公式
+    \item 不需要和环境交互
+    \item 只用预先收集好的历史数据集$\mathcal{D} = \{(s_i, a_i, r_i, s'_i)\}$
+\end{itemize}
+\end{keypoint}
+
+\begin{example}[三种方法的比喻——学开车]
+\textbf{Model-Based}（有驾驶模拟器的物理引擎）：
+\begin{itemize}
+    \item 你知道方向盘转30度，车会怎么转弯（有$P$的公式）
+    \item 可以在脑子里规划："如果我这样打方向盘，车会..."
+\end{itemize}
+
+\textbf{Model-Free Online}（真车上路练）：
+\begin{itemize}
+    \item 你不知道转弯的物理公式
+    \item 但你可以反复尝试，每次转完看看效果，慢慢学会
+    \item \textbf{需要一辆真车和一条路}
+\end{itemize}
+
+\textbf{Model-Free Offline}（看别人的行车记录仪）：
+\begin{itemize}
+    \item 你不知道物理公式
+    \item 你也没有车可以练
+    \item 你只有一堆别人开车的视频，从中学习"什么情况该怎么做"
+    \item \textbf{这是最难的}：你不能尝试视频里没有的动作
+\end{itemize}
+\end{example}
+
+\begin{plainwords}[为什么Offline RL很难？]
+想象你只能看别人开车的视频学开车，不能自己上手：
+
+\textbf{分布偏移（Distribution Shift）}：
+\begin{itemize}
+    \item 视频里的司机都是老司机，从不犯错
+    \item 你学到的策略只在"正常情况"下有效
+    \item 一旦遇到视频里没见过的情况（比如你自己犯了个小错），你就不知道怎么纠正
+\end{itemize}
+
+\textbf{过度乐观（Overestimation）}：
+\begin{itemize}
+    \item 数据集里没有尝试过的动作，Q值可能被高估
+    \item 因为你从来没见过那个动作的后果
+\end{itemize}
+
+这就是为什么Offline RL需要特殊算法（CQL、IQL等）来处理这些问题。
+\end{plainwords}
+
+\begin{keypoint}[值迭代——上帝视角]
+值迭代的更新公式：
+\[
+V_{k+1}(s) = \max_a \sum_{s'} \colorbox{yellow!30}{$P(s'|s,a)$} \left[\colorbox{yellow!30}{$R(s,a)$} + \gamma V_k(s')\right]
+\]
+
+\textbf{为什么是有模型的？}
+\begin{itemize}
+    \item \textbf{显式依赖$P$}：公式里有$\sum_{s'}$和$P(s'|s,a)$，必须预先知道所有可能的下一状态及其概率
+    \item \textbf{计算期望}：不是"试一试"，而是直接用概率算出期望值
+    \item \textbf{不与环境交互}：只要给它规则书（$P$和$R$），它在脑子里就能算出最优解
+\end{itemize}
+
+\textbf{比喻}：就像下棋，你知道规则，可以在脑海里推演，不需要真的落子。
+\end{keypoint}
+
+\begin{keypoint}[Q-learning——试错学习（Online Model-Free）]
+Q-learning的更新公式：
+\[
+Q(s,a) \leftarrow Q(s,a) + \alpha\left[\underbrace{r + \gamma \max_{a'} Q(s', a')}_{\text{目标值（来自实际经验）}} - Q(s,a)\right]
+\]
+
+\textbf{为什么是无模型的？}
+\begin{itemize}
+    \item \textbf{$P$和$R$消失了}：公式里没有$\sum_{s'}$，没有$P(s'|s,a)$
+    \item \textbf{基于采样}：智能体实际执行动作$a$，环境反馈"你到了$s'$，奖励$r$"
+    \item \textbf{依靠交互}：不需要知道"往右走滑倒概率10\%"，只需要摔几次就知道了
+\end{itemize}
+
+\textbf{但它仍然需要}：能够和环境交互，收集$(s, a, r, s')$样本！
+\end{keypoint}
+
+\begin{example}[计算期望 vs 采样——全班平均身高]
+\textbf{值迭代（有模型）}：
+
+老师手里有一张表（模型）：1.6m的学生占10\%，1.7m的占20\%...
+
+直接用公式计算：$1.6 \times 0.1 + 1.7 \times 0.2 + \cdots = \text{期望身高}$
+
+\textbf{不需要看具体学生，只要有概率表就行。}
+
+\textbf{Q-learning（无模型）}：
+
+老师手里没表。随机抓一个学生量身高（采样），1.65m，更新估计值；
+
+再抓一个，1.75m，再更新...
+
+\textbf{不需要概率表，需要一个个具体的样本。}
+
+抓的学生足够多，估计值就逼近真实平均身高。
+\end{example}
+
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+\textbf{特性} & \textbf{值迭代} & \textbf{Q-learning} \\
+\midrule
+类型 & Model-Based（动态规划） & Model-Free（时序差分） \\
+核心机制 & 计算期望（Expectation） & 采样（Sampling） \\
+是否需要$P(s'|s,a)$ & 是（必须已知） & 否（它是未知黑盒） \\
+数据来源 & 环境的数学定义 & 实际交互的经验样本 \\
+比喻 & 看着地图规划路线 & 在迷宫里瞎逛摸索路线 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Q-learning算法}
+
+\begin{example}[Q-learning的生活比喻——试吃学习]
+你搬到新城市，想找好吃的餐厅。
+
+\textbf{问题}：你不知道每家店多好吃（不知道$R$），也不知道吃完会想去哪（不知道$P$）。
+
+\textbf{Q-learning策略}：
+\begin{enumerate}
+    \item 随便选一家店吃（探索）
+    \item 吃完打个分（观察奖励$r$）
+    \item 更新你对这家店的评分：
+    \[
+    Q(\text{这家店}) \leftarrow Q(\text{这家店}) + \alpha \times (\text{实际体验} - \text{之前预期})
+    \]
+\end{enumerate}
+
+\textbf{关键}：你不需要知道"这家店平均多好吃"，只需要\textbf{每次吃完更新一点点}！
+
+吃得多了，你的评分$Q$自然会收敛到真实水平。
+\end{example}
+
+\begin{algorithm}[H]
+\caption{Q-learning}
+\begin{algorithmic}[1]
+\State 初始化$Q(s,a)$任意
+\For{每步$t$}
+    \State 在状态$s_t$选择动作$a_t$（$\epsilon$-greedy）
+    \State 观察$r_t$和$s_{t+1}$
+    \State $Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha_t \left[r_t + \gamma \max_{a'} Q(s_{t+1}, a') - Q(s_t, a_t)\right]$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{example}[Q-learning更新的直觉——修正预期]
+你以为某餐厅8分（$Q = 8$），结果吃完发现：
+\begin{itemize}
+    \item 这顿饭7分（$r = 7$）
+    \item 吃完心情好，下一个状态价值10分（$\max_{a'} Q(s', a') = 10$）
+    \item $\gamma = 0.9$
+\end{itemize}
+
+\textbf{TD目标}：$r + \gamma \max Q' = 7 + 0.9 \times 10 = 16$
+
+\textbf{TD误差}：$16 - 8 = 8$（实际比预期好！）
+
+\textbf{更新}（$\alpha = 0.1$）：$Q \leftarrow 8 + 0.1 \times 8 = 8.8$
+
+你把评分从8上调到8.8。多吃几次，评分会稳定在真实水平。
+\end{example}
+
+\begin{theorem}[Q-learning收敛 - Watkins \& Dayan, 1992; Jaakkola et al., 1994]
+如果：
+\begin{enumerate}
+    \item 所有$(s,a)$被无限次访问
+    \item 学习率满足：$\sum_t \alpha_t(s,a) = \infty$且$\sum_t \alpha_t(s,a)^2 < \infty$
+\end{enumerate}
+则$Q_t \to Q^*$以概率1。
+\end{theorem}
+
+\begin{example}[学习率条件的直觉]
+条件1：$\sum_t \alpha_t = \infty$（学习率之和发散）
+
+\textbf{意思}：你要\textbf{持续学习}，不能太早停下来。
+
+如果$\alpha_t$衰减太快（比如$\alpha_t = 1/t^2$），总学习量有限，可能还没学到真值就停了。
+
+条件2：$\sum_t \alpha_t^2 < \infty$（学习率平方之和收敛）
+
+\textbf{意思}：你要\textbf{逐渐冷静}，不能总是大幅调整。
+
+如果$\alpha_t$不衰减（比如恒等于1），噪声会一直影响你，永远不稳定。
+
+\textbf{黄金法则}：$\alpha_t = 1/t$刚好满足两个条件！
+\end{example}
+
+\begin{proof}
+\textbf{Step 1：写成随机逼近形式}
+
+Q-learning更新可以写成：
+\[
+Q_{t+1}(s,a) = Q_t(s,a) + \alpha_t(s,a) \cdot \mathbf{1}_{(s_t,a_t)=(s,a)} \cdot [r_t + \gamma \max_{a'} Q_t(s_{t+1}, a') - Q_t(s,a)]
+\]
+
+定义：
+\begin{itemize}
+    \item $F_t(s,a) = R(s,a) + \gamma \sum_{s'} P(s'|s,a) \max_{a'} Q_t(s',a') - Q_t(s,a)$（期望更新方向）
+    \item $w_t(s,a) = [r_t + \gamma \max_{a'} Q_t(s_{t+1},a')] - [R(s,a) + \gamma \sum_{s'} P(s'|s,a) \max_{a'} Q_t(s',a')]$（噪声）
+\end{itemize}
+
+则更新变成：
+\[
+Q_{t+1}(s,a) = Q_t(s,a) + \alpha_t \cdot \mathbf{1}_{(s_t,a_t)=(s,a)} \cdot [F_t(s,a) + w_t(s,a)]
+\]
+
+\textbf{Step 2：噪声是鞅差}
+
+条件于历史$\mathcal{F}_t = \sigma(s_0, a_0, r_0, \ldots, s_t, a_t)$：
+\[
+\mathbb{E}[w_t(s,a) | \mathcal{F}_t] = 0
+\]
+因为$r_t$和$s_{t+1}$的期望正好是$R(s,a)$和$\sum_{s'} P(s'|s,a)(\cdot)$。
+
+\textbf{Step 3：$F_t$具有收缩性质}
+
+令$\Delta_t = Q_t - Q^*$。由于$Q^* = T^* Q^*$（Bellman最优方程）：
+\begin{align*}
+F_t(s,a) &= (T^* Q_t)(s,a) - Q_t(s,a) \\
+&= [(T^* Q_t)(s,a) - (T^* Q^*)(s,a)] + [Q^*(s,a) - Q_t(s,a)] \\
+&= [(T^* Q_t)(s,a) - (T^* Q^*)(s,a)] - \Delta_t(s,a)
+\end{align*}
+
+由$T^*$的收缩性（前面证明过）：
+\[
+|(T^* Q_t)(s,a) - (T^* Q^*)(s,a)| \leq \gamma \|\Delta_t\|_\infty
+\]
+
+所以：
+\[
+|F_t(s,a) + \Delta_t(s,a)| \leq \gamma \|\Delta_t\|_\infty
+\]
+
+\textbf{Step 4：应用随机逼近定理}
+
+我们需要Jaakkola等人的随机逼近定理：
+
+\begin{theorem}[随机逼近收敛条件]
+考虑迭代：$x_{t+1} = x_t + \alpha_t(F_t(x_t) + w_t)$
+
+如果：
+\begin{enumerate}
+    \item $\mathbb{E}[w_t | \mathcal{F}_t] = 0$，$\mathbb{E}[w_t^2 | \mathcal{F}_t] \leq C(1 + \|x_t\|^2)$
+    \item 存在$\gamma < 1$使得$\|F_t(x)\| \leq \gamma \|x\|$（收缩性）
+    \item $\sum_t \alpha_t = \infty$，$\sum_t \alpha_t^2 < \infty$
+\end{enumerate}
+则$x_t \to 0$ w.p.1。
+\end{theorem}
+
+对Q-learning，令$x_t = \Delta_t = Q_t - Q^*$：
+
+\begin{itemize}
+    \item 条件1：噪声$w_t$有界方差（因为$Q_t$有界，$r_t$有界）\checkmark
+    \item 条件2：$F_t(\Delta) = (T^* Q) - Q = (T^*(Q^* + \Delta)) - (Q^* + \Delta)$满足$|F_t + \Delta| \leq \gamma\|\Delta\|$ \checkmark
+    \item 条件3：学习率条件 \checkmark
+\end{itemize}
+
+因此$\Delta_t \to 0$，即$Q_t \to Q^*$。
+
+\textbf{Step 5：处理异步更新}
+
+上面假设每步更新所有$(s,a)$。实际Q-learning只更新访问到的$(s,a)$。
+
+关键：如果每个$(s,a)$被无限次访问，它的有效学习率序列$\{\alpha_{t_i}\}$仍满足条件3。
+
+由独立的随机逼近定理，每个$(s,a)$的$Q$值都收敛到$Q^*$。
+\end{proof}
+
+\begin{calculation}[Q-learning收敛速度]
+理论：$\mathbb{E}[\|\Delta_t\|^2] = O(1/t)$（使用$\alpha_t = 1/t$）
+
+实际例子：$|S|=100$，$|A|=4$，$\gamma=0.9$
+
+要达到$\|\Delta\| \leq 0.1$：
+\begin{itemize}
+    \item 需要每个$(s,a)$被更新约$O(1/0.1^2) = 100$次
+    \item 总共$100 \times 4 \times 100 = 40000$次更新
+    \item 如果探索均匀，需要约40000次转移
+\end{itemize}
+
+实际中由于探索不均匀，可能需要更多。
+\end{calculation}
+
+\begin{keypoint}[Q-learning vs 值迭代]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& 值迭代 & Q-learning \\
+\midrule
+需要模型 & 是 & 否 \\
+更新方式 & 同步（所有状态） & 异步（访问到的） \\
+收敛速度 & $O(\gamma^k)$（线性） & $O(1/k)$（次线性） \\
+每次代价 & $O(|S|^2|A|)$ & $O(1)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Q-learning牺牲了收敛速度，换来了不需要模型的优势。
+\end{keypoint}
+
+%=============================================================================
+\section{线性函数逼近的收敛性}
+%=============================================================================
+
+\begin{plainwords}
+当$|S|$很大（比如$10^6$），不能存储完整的$V(s)$表。
+
+解决方案：\textbf{函数逼近}$V_\theta(s) = \theta^T \phi(s)$
+
+问题：还能收敛吗？
+\end{plainwords}
+
+\subsection{Linear TD(0)}
+
+\begin{definition}[Linear TD(0)]
+\[
+\theta_{t+1} = \theta_t + \alpha_t \underbrace{(r_t + \gamma \theta_t^T \phi(s_{t+1}) - \theta_t^T \phi(s_t))}_{\text{TD误差 } \delta_t} \phi(s_t)
+\]
+\end{definition}
+
+\begin{theorem}[Linear TD(0)收敛 - Tsitsiklis \& Van Roy, 1997]
+在on-policy采样下，Linear TD(0)收敛到\textbf{投影Bellman方程}的解：
+\[
+\Phi \theta^* = \Pi_D T^\pi (\Phi \theta^*)
+\]
+其中$\Pi_D$是在状态分布$D$加权下到特征空间的投影。
+\end{theorem}
+
+\begin{plainwords}[投影Bellman方程]
+真实$V^\pi$可能不在线性空间里。TD(0)找的是：在\textbf{能表示的函数中}，最接近满足Bellman方程的那个。
+\end{plainwords}
+
+\begin{proof}
+\textbf{Step 1：期望更新}
+
+$\theta$的期望更新方向：
+\[
+\mathbb{E}[\delta_t \phi(s_t)] = \Phi^T D (T^\pi \Phi \theta - \Phi \theta)
+\]
+
+\textbf{Step 2：不动点}
+
+令期望更新为零：$\Phi^T D (T^\pi \Phi \theta^* - \Phi \theta^*) = 0$
+
+这意味着$T^\pi \Phi\theta^* - \Phi\theta^* \perp \text{col}(\Phi)$在$D$-内积下，即$\Phi\theta^* = \Pi_D T^\pi \Phi\theta^*$。
+
+\textbf{Step 3：$\Pi_D T^\pi$是收缩}
+
+$\|\Pi_D T^\pi V - \Pi_D T^\pi V'\|_D \leq \|T^\pi V - T^\pi V'\|_D \leq \gamma\|V-V'\|_D$
+
+由Banach定理，$\theta^*$存在且唯一。
+\end{proof}
+
+\begin{theorem}[逼近误差界]
+\[
+\|V_{\theta^*} - V^\pi\|_D \leq \frac{1}{\sqrt{1-\gamma^2}} \min_\theta \|V^\pi - \Phi\theta\|_D
+\]
+\end{theorem}
+
+\begin{calculation}[误差放大]
+\begin{center}
+\begin{tabular}{c|c|l}
+\toprule
+$\gamma$ & 放大因子$\frac{1}{\sqrt{1-\gamma^2}}$ & 含义 \\
+\midrule
+0.9 & 2.3 & 最佳逼近误差放大2.3倍 \\
+0.99 & 7.1 & 放大7倍 \\
+0.999 & 22.4 & 放大22倍 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$\gamma$越大，线性逼近误差放大越严重！
+\end{calculation}
+
+\subsection{Deadly Triad：发散的危险}
+
+\begin{keypoint}[致命三角]
+以下三者组合可能导致\textbf{发散}：
+\begin{enumerate}
+    \item \textbf{函数逼近}（不是表格）
+    \item \textbf{Bootstrapping}（用估计更新估计）
+    \item \textbf{Off-policy}（行为策略$\neq$目标策略）
+\end{enumerate}
+\end{keypoint}
+
+\begin{example}[Deadly Triad的生活比喻——谣言传播]
+想象一个办公室里传谣言：
+
+\textbf{函数逼近}：你不认识所有人，只能根据"职位相似的人想法差不多"来猜测。
+
+\textbf{Bootstrapping}：你从别人那听到消息，就信以为真，然后传给下一个人。
+
+\textbf{Off-policy}：你听的是A部门的消息，但你在B部门传。
+
+\textbf{单独一个问题不大}：
+\begin{itemize}
+    \item 只有函数逼近：你直接问每个人，虽然有猜测但能纠正
+    \item 只有bootstrapping：消息来源准确，传着传着会稳定
+    \item 只有off-policy：至少你传的是真实消息
+\end{itemize}
+
+\textbf{三个一起就炸了}：
+\begin{itemize}
+    \item 你猜B部门的人和A部门某人想法一样
+    \item 你从A部门听到一个猜测（不是事实）
+    \item 你把这个猜测传给B部门，B部门的人又传回A部门
+    \item 误差越传越大，最后谣言离谱到天上去！
+\end{itemize}
+\end{example}
+
+\begin{example}[Baird反例]
+Baird (1995)构造了一个7状态MDP，使用Linear Q-learning（off-policy），参数$\theta \to \infty$！
+
+原因：off-policy采样分布与更新目标不匹配，更新方向不是下降方向。
+\end{example}
+
+\begin{theorem}[Gradient TD收敛 - Sutton et al., 2009]
+GTD2算法通过\textbf{显式最小化}投影Bellman误差，在off-policy下也收敛。
+\end{theorem}
+
+\begin{plainwords}[如何避免Deadly Triad]
+\begin{enumerate}
+    \item \textbf{用表格}：如果状态空间小，直接用表格，不用函数逼近
+    \item \textbf{用Monte Carlo}：不用bootstrapping，等episode结束再更新
+    \item \textbf{用on-policy}：只学习你实际执行的策略（如SARSA）
+    \item \textbf{用GTD}：如果必须三者都要，用Gradient TD类方法
+\end{enumerate}
+\end{plainwords}
+
+%=============================================================================
+\section{两个关键引理}
+%=============================================================================
+
+\begin{plainwords}
+接下来介绍两个在RL理论中反复出现的引理，它们是后续很多结果的基础。
+\end{plainwords}
+
+\subsection{Simulation Lemma：模型误差如何传播}
+
+\begin{plainwords}
+Model-based RL学习环境模型$\hat{P}$，然后在模型上规划。
+
+问题：模型不完美，误差如何影响最终策略？
+\end{plainwords}
+
+\begin{example}[Simulation Lemma的生活版——用地图导航]
+你要从A到B，用的是一张旧地图（模型$\hat{P}$）。
+
+\textbf{问题}：地图和实际道路（真实$P$）有些出入，会导致多大问题？
+
+\textbf{直觉分析}：
+\begin{itemize}
+    \item 如果只走1步，地图误差$\epsilon$就是实际误差$\epsilon$
+    \item 如果走2步，第1步的误差让你到错误位置，第2步在错误位置又犯错
+    \item 走$n$步，误差\textbf{累积}！
+\end{itemize}
+
+\textbf{更糟糕的是}：未来的误差要\textbf{折现回今天}。
+
+如果$\gamma = 0.99$（很看重未来），折现因子是$1/(1-0.99)^2 = 10000$！
+
+\textbf{结论}：地图误差1\%，导航效果可能差100倍！
+\end{example}
+
+\begin{theorem}[Simulation Lemma]
+设真实MDP为$(P, R)$，学习到的模型为$(\hat{P}, \hat{R})$，$\hat{\pi}$是模型上的最优策略。
+
+则在真实环境中：
+\[
+V^*(s) - V^{\hat{\pi}}(s) \leq \frac{2}{(1-\gamma)^2} \left(\epsilon_R + \gamma \epsilon_P \cdot \frac{R_{max}}{1-\gamma}\right)
+\]
+其中$\epsilon_R = \max_{s,a}|R - \hat{R}|$，$\epsilon_P = \max_{s,a}\|P - \hat{P}\|_1$。
+\end{theorem}
+
+\begin{example}[误差放大的数值感受]
+$\gamma = 0.99$，$R_{max} = 1$，模型误差$\epsilon_P = \epsilon_R = 0.01$（1\%）
+
+放大因子：$\frac{2}{(1-0.99)^2} = \frac{2}{0.0001} = 20000$
+
+策略次优性上界：$20000 \times (0.01 + 0.99 \times 0.01 \times 100) \approx 20000$
+
+\textbf{1\%的模型误差，策略可能差20000分}！
+
+这就是为什么model-based RL对模型精度要求极高。
+\end{example}
+
+\begin{proof}
+\textbf{Step 1}：分解误差
+\[
+V^* - V^{\hat{\pi}} = \underbrace{(V^* - \hat{V}^*)}_{\text{模型乐观/悲观}} + \underbrace{(\hat{V}^{\hat{\pi}} - V^{\hat{\pi}})}_{\text{策略在模型vs真实}}
+\]
+
+\textbf{Step 2}：界定单策略误差
+
+对任意策略$\pi$，比较$V^\pi$（真实）和$\hat{V}^\pi$（模型）：
+\[
+|V^\pi(s) - \hat{V}^\pi(s)| \leq \frac{\epsilon_R}{1-\gamma} + \frac{\gamma \epsilon_P R_{max}}{(1-\gamma)^2}
+\]
+
+\textbf{Step 3}：合并两项。
+\end{proof}
+
+\subsection{为什么Model-Based RL在实践中常常不如Model-Free？}
+
+\begin{plainwords}[一个尖锐的观察]
+理论上，Model-Based RL应该更好：样本效率高、能规划、懂因果。
+
+但实践中，Model-Free方法（PPO, SAC, DQN）占据绝对主导：ChatGPT的RLHF、OpenAI Five打Dota、机器人控制...
+
+为什么？因为MBRL有四大痛点，让它\textbf{"一顿操作猛如虎，一看效果二百五"}。
+\end{plainwords}
+
+\begin{keypoint}[痛点1：复合误差——最致命的杀手]
+这就是Simulation Lemma警告我们的！
+
+\textbf{场景}：你的模型精度99\%（已经很高了），需要规划100步。
+
+\begin{center}
+\begin{tabular}{c|c}
+\toprule
+步数 & 累积精度 \\
+\midrule
+1 & $0.99$ \\
+10 & $0.99^{10} = 0.90$ \\
+50 & $0.99^{50} = 0.61$ \\
+100 & $0.99^{100} = 0.36$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{结果}：智能体在脑海里规划出完美路径，现实中走到第10步就掉沟里了。
+
+\textbf{Model-Free没这问题}：它不预测未来，只记住"这个状态做这个动作大概率是好的"。不需要多步推演，没有误差累积。
+\end{keypoint}
+
+\begin{keypoint}[痛点2：Vapnik原则——不要解决更难的问题]
+统计学习大佬Vapnik说：\textbf{"尽量直接解决问题，而不要通过解决一个更难的问题来解决它。"}
+
+\textbf{MBRL的做法}（更难的问题）：
+\begin{itemize}
+    \item 试图学会整个世界的物理规律$P(s'|s,a)$
+    \item 为了学会打网球，先学空气动力学、重力、肌肉力学，然后在脑子里模拟
+    \item 这太难了！
+\end{itemize}
+
+\textbf{MFRL的做法}（直接的问题）：
+\begin{itemize}
+    \item 试图学会怎么赢（策略$\pi(a|s)$）
+    \item 不管空气动力学，只知道"球飞过来，挥拍就能赢"
+\end{itemize}
+
+\textbf{现实}：策略往往很简单（"见到悬崖就左转"），但环境动力学极其复杂（悬崖边的风速、地面摩擦力）。非要建模那个复杂环境，属于\textbf{舍近求远}。
+\end{keypoint}
+
+\begin{keypoint}[痛点3：目标不匹配——预测准$\neq$拿分高]
+训练环境模型用的是MSE损失：让预测画面和真实画面像素越接近越好。
+
+\textbf{例子}：玩《超级马里奥》
+
+模型的重点：屏幕背景有大量云朵和树叶，模型花90\%力气预测云朵怎么飘（像素多，MSE权重高）
+
+被忽略的细节：屏幕角落有一个只有几像素的\textbf{子弹}飞过来。模型觉得预测这个子弹误差才几个像素，无所谓。
+
+\textbf{后果}：模型能完美生成背景风景画，但完全忽略了致命子弹。智能体觉得前面安全，一走过去就挂了。
+
+这就是：\textbf{Model预测得准（Loss低），但对RL任务（Reward）没帮助}。
+\end{keypoint}
+
+\begin{keypoint}[痛点4：幻觉作弊——智能体很鸡贼]
+智能体会\textbf{利用模型的Bug刷分}，而不是学会真正的技能。
+
+\textbf{案例}：模拟器里墙壁碰撞检测有点Bug。
+
+智能体发现：以某个奇怪角度撞墙，能瞬移或获得无限分！
+
+\textbf{结果}：
+\begin{itemize}
+    \item 在模型里：表现得像神，拿到正无穷奖励
+    \item 部署到真实环境：只会傻傻往墙上撞，极其弱智
+\end{itemize}
+
+这就是为什么Sim-to-Real（仿真到现实）如此困难。
+\end{keypoint}
+
+\begin{example}[MBRL的复活之路——隐空间模型]
+既然预测像素（真实物理世界）太难，那就\textbf{不预测像素}！
+
+\textbf{MuZero / AlphaZero}：
+\begin{itemize}
+    \item 不预测棋盘画面，而是预测"价值"和"策略"
+    \item 学会了一个"抽象的规则"
+    \item 在棋类和Atari游戏中封神
+\end{itemize}
+
+\textbf{Dreamer (V1/V2/V3)}：
+\begin{itemize}
+    \item 不预测具体像素，而是在压缩的Latent Space（潜空间）里"做梦"
+    \item 大大减少了复合误差
+\end{itemize}
+
+\textbf{结论}：
+\begin{itemize}
+    \item "显式"建模物理世界（Old School MBRL）→ 不太行，世界太复杂
+    \item "隐式"建模（Latent MBRL）→ 正在成为SOTA，但需要极高算法技巧
+    \item 目前PPO这种"傻瓜式"Model-Free算法仍然最好用、最稳定
+\end{itemize}
+\end{example}
+
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+\textbf{对比} & \textbf{Model-Based} & \textbf{Model-Free} \\
+\midrule
+样本效率 & 高（理论上） & 低 \\
+复合误差 & 致命问题 & 无 \\
+实现难度 & 高 & 低 \\
+稳定性 & 差 & 好 \\
+工业应用 & 少 & 主流（PPO, SAC） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Performance Difference Lemma}
+
+\begin{theorem}[Performance Difference Lemma - Kakade \& Langford, 2002]
+\[
+V^{\pi'}(s) - V^\pi(s) = \frac{1}{1-\gamma} \mathbb{E}_{s' \sim d^{\pi'}_s}\left[\mathbb{E}_{a \sim \pi'}[A^\pi(s', a)]\right]
+\]
+其中$A^\pi(s,a) = Q^\pi(s,a) - V^\pi(s)$是优势函数。
+\end{theorem}
+
+\begin{example}[Performance Difference的生活版——换工作]
+你现在的工作策略是$\pi$（比如"遇到问题就加班"）。
+
+你考虑新策略$\pi'$（比如"遇到问题先求助同事"）。
+
+\textbf{问}：新策略比旧策略好多少？
+
+\textbf{优势函数}$A^\pi(s, a)$的意思：
+\begin{itemize}
+    \item 在状态$s$（比如"遇到bug"）
+    \item 如果用旧策略，期望收益是$V^\pi(s)$（加班解决，累但有效）
+    \item 如果这次选动作$a$（求助同事），期望收益是$Q^\pi(s, a)$
+    \item $A^\pi(s, a) = Q^\pi(s, a) - V^\pi(s)$就是"这次选$a$比按旧习惯\textbf{好多少}"
+\end{itemize}
+
+\textbf{Performance Difference Lemma说}：
+
+新策略的总收益 - 旧策略的总收益 = 新策略访问的所有状态上，新策略的动作比旧策略\textbf{平均好多少}。
+
+\textbf{关键洞察}：用\textbf{旧策略的}$A^\pi$评估\textbf{新策略}$\pi'$！
+\end{example}
+
+\begin{proof}
+\textbf{Step 1}：展开$V^{\pi'}$并加减$V^\pi$
+\begin{align*}
+V^{\pi'}(s) &= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t r_t\right] \\
+&= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t (r_t + V^\pi(s_t) - V^\pi(s_t))\right] \\
+&= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t (r_t + \gamma V^\pi(s_{t+1}) - V^\pi(s_t))\right] + V^\pi(s)
+\end{align*}
+最后用了telescoping：$\sum_t \gamma^t(V^\pi(s_t) - \gamma V^\pi(s_{t+1})) = V^\pi(s_0)$。
+
+\textbf{Step 2}：识别优势函数
+
+$r_t + \gamma V^\pi(s_{t+1}) - V^\pi(s_t) = Q^\pi(s_t, a_t) - V^\pi(s_t) = A^\pi(s_t, a_t)$
+
+所以$V^{\pi'}(s) - V^\pi(s) = \mathbb{E}_{\pi'}[\sum_t \gamma^t A^\pi(s_t, a_t)]$。
+
+\textbf{Step 3}：重写为状态分布的期望。
+\end{proof}
+
+\begin{corollary}[策略改进条件]
+如果对所有$s$：$\mathbb{E}_{a \sim \pi'}[A^\pi(s, a)] \geq 0$，则$V^{\pi'} \geq V^\pi$。
+\end{corollary}
+
+\begin{example}[策略改进的直觉]
+如果新策略$\pi'$在\textbf{每个状态}的动作都\textbf{不比}旧策略差（$A^\pi \geq 0$），那新策略整体更好。
+
+这就像：如果你每个决策都至少和以前一样好，那你的人生不会变差！
+\end{example}
+
+\begin{keypoint}[Performance Difference Lemma的应用]
+\begin{itemize}
+    \item \textbf{策略迭代}：贪婪策略保证$A^\pi(s, \pi'(s)) \geq 0$
+    \item \textbf{TRPO/PPO}（下两周）：用$A^\pi$构造代理目标，约束$\pi'$不离$\pi$太远
+\end{itemize}
+\end{keypoint}
+
+%=============================================================================
+\section{Multi-Agent RL的收敛性}
+%=============================================================================
+
+\begin{plainwords}
+当有\textbf{多个agent}同时学习时：
+\begin{itemize}
+    \item 每个agent的最优策略依赖于其他agent
+    \item 其他agent也在学习，环境\textbf{非平稳}
+    \item 目标是\textbf{纳什均衡}，不是单方最优
+\end{itemize}
+\end{plainwords}
+
+\begin{example}[Multi-Agent的生活版——室友博弈]
+你和室友共用一个厨房，每天晚上都要决定：
+
+\textbf{动作}：\{早点做饭(6pm), 晚点做饭(8pm)\}
+
+\textbf{收益}：
+\begin{itemize}
+    \item 两人都6pm：厨房拥挤，各得3分
+    \item 两人都8pm：厨房拥挤，各得3分
+    \item 一人6pm一人8pm：都舒服，各得5分
+\end{itemize}
+
+\textbf{问题}：你应该选什么时间？
+
+\textbf{困难}：你的最优选择\textbf{取决于室友选什么}！
+\begin{itemize}
+    \item 如果室友选6pm，你应该选8pm
+    \item 如果室友选8pm，你应该选6pm
+    \item 但室友也在想同样的问题...
+\end{itemize}
+
+\textbf{纳什均衡}：双方都随机选（各50\%），期望收益4分。谁都不想单方面改变。
+\end{example}
+
+\begin{definition}[随机博弈]
+$n$人随机博弈$(S, \{A_i\}, P, \{R_i\}, \gamma)$：每个玩家$i$有自己的动作空间$A_i$和奖励函数$R_i$。
+\end{definition}
+
+\begin{definition}[纳什均衡]
+$(\pi_1^*, \ldots, \pi_n^*)$是纳什均衡，如果没有玩家能通过单方面改变策略获益。
+\end{definition}
+
+\begin{example}[纳什均衡的直觉——交通灯]
+两辆车在十字路口相遇，都想先过。
+
+\textbf{策略}：\{冲过去, 让一下\}
+
+\textbf{收益矩阵}（你的收益）：
+\begin{center}
+\begin{tabular}{c|cc}
+& 对方冲 & 对方让 \\
+\hline
+你冲 & -100（撞车） & 10（你先过） \\
+你让 & 5（对方先过） & 0（都让，尴尬）
+\end{tabular}
+\end{center}
+
+\textbf{纳什均衡}：一个冲一个让。如果你知道对方会让，你就冲；如果你知道对方会冲，你就让。
+
+在这个均衡点，谁都不想单方面改变！
+\end{example}
+
+\subsection{零和博弈：Minimax收敛}
+
+\begin{definition}[零和随机博弈]
+两人零和随机博弈：$R_1(s, a_1, a_2) = -R_2(s, a_1, a_2)$。
+
+玩家1最大化，玩家2最小化。
+\end{definition}
+
+\begin{theorem}[Minimax定理 - von Neumann]
+对任意矩阵博弈$M$：
+\[
+\max_{\pi_1 \in \Delta(A_1)} \min_{a_2 \in A_2} \sum_{a_1} \pi_1(a_1) M(a_1, a_2) = \min_{\pi_2 \in \Delta(A_2)} \max_{a_1 \in A_1} \sum_{a_2} \pi_2(a_2) M(a_1, a_2)
+\]
+这个共同值记为$\text{val}(M)$。
+\end{theorem}
+
+\begin{theorem}[Minimax-Q收敛 - Littman, 1994]
+Minimax-Q学习更新：
+\[
+Q(s, a_1, a_2) \leftarrow (1-\alpha)Q(s,a_1,a_2) + \alpha[r + \gamma \text{val}(Q(s', \cdot, \cdot))]
+\]
+在满足标准随机逼近条件下，$Q \to Q^*$（纳什均衡Q函数）。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1：定义Minimax Bellman算子}
+
+\[
+(T Q)(s, a_1, a_2) = R(s, a_1, a_2) + \gamma \sum_{s'} P(s'|s, a_1, a_2) \text{val}(Q(s', \cdot, \cdot))
+\]
+
+\textbf{Step 2：证明$T$是$\gamma$-收缩}
+
+关键引理：$\text{val}(\cdot)$是非扩张的（non-expansive）。
+
+\begin{lemma}
+对任意矩阵$M, M'$：$|\text{val}(M) - \text{val}(M')| \leq \|M - M'\|_\infty$
+\end{lemma}
+
+\begin{proof}[引理证明]
+设$\pi_1^*$是$M$的最优混合策略，$\pi_2^*$是$M'$的最优混合策略。
+
+\begin{align*}
+\text{val}(M) &= \max_{\pi_1} \min_{a_2} \pi_1^T M e_{a_2} = \min_{a_2} (\pi_1^*)^T M e_{a_2} \\
+&\leq \min_{a_2} (\pi_1^*)^T M' e_{a_2} + \|M - M'\|_\infty \\
+&\leq \max_{\pi_1} \min_{a_2} \pi_1^T M' e_{a_2} + \|M - M'\|_\infty \\
+&= \text{val}(M') + \|M - M'\|_\infty
+\end{align*}
+
+对称地，$\text{val}(M') \leq \text{val}(M) + \|M - M'\|_\infty$。
+
+所以$|\text{val}(M) - \text{val}(M')| \leq \|M - M'\|_\infty$。
+\end{proof}
+
+现在证明$T$是收缩：
+
+对任意$Q, Q'$和$(s, a_1, a_2)$：
+\begin{align*}
+|(TQ)(s,a_1,a_2) - (TQ')(s,a_1,a_2)| &= \gamma \left|\sum_{s'} P(s'|s,a_1,a_2)[\text{val}(Q(s',\cdot,\cdot)) - \text{val}(Q'(s',\cdot,\cdot))]\right| \\
+&\leq \gamma \sum_{s'} P(s'|s,a_1,a_2) |\text{val}(Q(s',\cdot,\cdot)) - \text{val}(Q'(s',\cdot,\cdot))| \\
+&\leq \gamma \sum_{s'} P(s'|s,a_1,a_2) \|Q(s',\cdot,\cdot) - Q'(s',\cdot,\cdot)\|_\infty \\
+&\leq \gamma \|Q - Q'\|_\infty
+\end{align*}
+
+\textbf{Step 3：Banach不动点定理}
+
+$T$是$\gamma$-收缩，所以存在唯一不动点$Q^*$，且值迭代收敛。
+
+\textbf{Step 4：随机逼近收敛}
+
+Minimax-Q是$T$的随机逼近版本。设$\Delta_t = Q_t - Q^*$：
+\[
+\Delta_{t+1}(s,a_1,a_2) = (1-\alpha_t)\Delta_t(s,a_1,a_2) + \alpha_t[\gamma(\text{val}(Q_t) - \text{val}(Q^*)) + w_t]
+\]
+
+由$\text{val}$的非扩张性：$|\text{val}(Q_t) - \text{val}(Q^*)| \leq \|\Delta_t\|_\infty$
+
+这是带噪声的收缩迭代，由随机逼近理论收敛。
+\end{proof}
+
+\begin{calculation}[石头剪刀布的值]
+收益矩阵（玩家1）：
+\[
+M = \begin{pmatrix} 0 & -1 & 1 \\ 1 & 0 & -1 \\ -1 & 1 & 0 \end{pmatrix}
+\]
+
+求$\text{val}(M)$：设玩家1策略$\pi = (p, q, 1-p-q)$。
+
+对手最优响应：选使$\pi^T M e_j$最小的$j$。
+
+$\pi^T M e_1 = q - (1-p-q) = p + 2q - 1$
+
+$\pi^T M e_2 = -p + (1-p-q) = 1 - 2p - q$
+
+$\pi^T M e_3 = p - q$
+
+要最大化$\min_j \pi^T M e_j$，令三者相等：
+
+$p + 2q - 1 = 1 - 2p - q = p - q$
+
+从第一和第三个：$p + 2q - 1 = p - q$，得$3q = 1$，$q = 1/3$。
+
+从第二和第三个：$1 - 2p - q = p - q$，得$1 = 3p$，$p = 1/3$。
+
+所以$\pi^* = (1/3, 1/3, 1/3)$，$\text{val}(M) = 1/3 - 1/3 = 0$。
+
+\textbf{纳什均衡}：双方都用$(1/3, 1/3, 1/3)$，值为0（公平博弈）。
+\end{calculation}
+
+\subsection{一般和博弈：收敛困难}
+
+\begin{theorem}[独立Q-learning可能不收敛]
+存在一般和博弈，独立Q-learning在策略空间中循环。
+\end{theorem}
+
+\begin{example}[Shapley博弈]
+\[
+\begin{array}{c|ccc}
+& A & B & C \\
+\hline
+A & (0,0) & (1,0) & (0,1) \\
+B & (0,1) & (0,0) & (1,0) \\
+C & (1,0) & (0,1) & (0,0)
+\end{array}
+\]
+
+独立Q-learning在$(A,A) \to (B,B) \to (C,C) \to (A,A)$循环，永远不收敛到混合均衡$(1/3, 1/3, 1/3)$。
+\end{example}
+
+%=============================================================================
+\section{TD($\lambda$)与资格迹}
+%=============================================================================
+
+\begin{plainwords}
+TD(0)只看\textbf{一步}：$V(s) \leftarrow V(s) + \alpha(r + \gamma V(s') - V(s))$
+
+Monte Carlo看\textbf{整条轨迹}：$V(s) \leftarrow V(s) + \alpha(G_t - V(s))$
+
+TD($\lambda$)用$\lambda \in [0,1]$在两者之间平滑过渡。
+\end{plainwords}
+
+\begin{example}[TD(0) vs MC vs TD($\lambda$)——考试成绩预测]
+你想预测学生的期末成绩，观察到一个学生的学习轨迹：
+
+第1周作业：80分 → 第2周作业：85分 → 第3周测验：90分 → 期末：88分
+
+\textbf{TD(0)}（只看下一步）：
+\begin{itemize}
+    \item 预测第1周价值时，只看第2周：$V(\text{第1周}) \approx 80 + \gamma \times V(\text{第2周})$
+    \item 问题：如果第2周的预测不准，误差会传播
+\end{itemize}
+
+\textbf{Monte Carlo}（看整条轨迹）：
+\begin{itemize}
+    \item 等到期末出分，用真实累积：$V(\text{第1周}) = 80 + 0.9 \times 85 + 0.81 \times 90 + ...$
+    \item 问题：必须等到episode结束，而且方差大
+\end{itemize}
+
+\textbf{TD($\lambda$)}（综合考虑）：
+\begin{itemize}
+    \item 给不同远近的信号加权：近的权重高（更可靠），远的权重低
+    \item $\lambda = 0$：退化为TD(0)
+    \item $\lambda = 1$：退化为MC
+    \item $\lambda = 0.9$：通常效果最好
+\end{itemize}
+\end{example}
+
+\begin{definition}[$\lambda$-回报]
+\[
+G_t^\lambda = (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} G_t^{(n)}
+\]
+是所有$n$-步回报$G_t^{(n)} = \sum_{i=0}^{n-1} \gamma^i r_{t+i} + \gamma^n V(s_{t+n})$的指数加权平均。
+\end{definition}
+
+\begin{example}[$\lambda$-回报的直觉——综合多个消息源]
+你想预测明天的天气，有几个信息源：
+\begin{itemize}
+    \item 今晚的天气预报（1步预测）：80\%准确
+    \item 看云彩自己判断（2步预测）：70\%准确
+    \item 农历节气（长期预测）：60\%准确
+\end{itemize}
+
+\textbf{TD(0)}：只信天气预报
+
+\textbf{MC}：只信农历节气（等到结果出来）
+
+\textbf{TD($\lambda$)}：综合所有信息，近期信息权重高：
+\[
+\text{预测} = 0.3 \times \text{天气预报} + 0.21 \times \text{云彩} + 0.15 \times \text{节气} + ...
+\]
+（$\lambda = 0.7$时的权重分配）
+\end{example}
+
+\begin{theorem}[前向=后向]
+\textbf{前向视角}：更新目标是$G_t^\lambda$
+
+\textbf{后向视角}：用资格迹$e(s) \leftarrow \gamma\lambda e(s) + \mathbf{1}_{s_t=s}$
+
+两者\textbf{等价}！关键是$G_t^\lambda - V(s_t) = \sum_{k=0}^\infty (\gamma\lambda)^k \delta_{t+k}$。
+\end{theorem}
+
+\begin{example}[资格迹的直觉——功劳分配]
+你的足球队赢了比赛，怎么分配功劳？
+
+\textbf{TD(0)}：只奖励进球的人
+
+\textbf{MC}：平均分配给所有人
+
+\textbf{TD($\lambda$)}（资格迹）：
+\begin{itemize}
+    \item 刚传球的人，功劳大（资格迹高）
+    \item 10分钟前传球的人，功劳小一点（资格迹衰减）
+    \item 上半场的助攻，功劳很小（资格迹已经很低）
+\end{itemize}
+
+资格迹就是\textbf{记忆}：记住谁最近访问过，用$\gamma\lambda$的速度遗忘。
+\end{example}
+
+\begin{keypoint}[$\lambda$的选择]
+\begin{center}
+\begin{tabular}{c|c|c|l}
+\toprule
+$\lambda$ & 偏差 & 方差 & 适用场景 \\
+\midrule
+0（TD(0)） & 高 & 低 & 模型准确，想快速学习 \\
+1（MC） & 低 & 高 & Episode短，奖励稀疏 \\
+0.9 & 中等 & 中等 & \textbf{通常最佳选择} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
+
+%=============================================================================
+\section{LSTD/LSPI：批量方法}
+%=============================================================================
+
+\begin{plainwords}
+TD是增量更新。能不能收集一堆数据，一次性算出最优参数？
+
+LSTD：闭式解，无需调学习率！
+\end{plainwords}
+
+\begin{example}[LSTD vs TD的比喻——学习骑自行车]
+\textbf{TD方法}（在线学习）：
+\begin{itemize}
+    \item 骑一小段，摔了，调整一点姿势
+    \item 再骑一小段，又摔了，再调整一点
+    \item 每次只根据\textbf{当前这一跤}调整
+    \item 问题：调整幅度（学习率）很难选，太大会乱晃，太小学得慢
+\end{itemize}
+
+\textbf{LSTD方法}（批量学习）：
+\begin{itemize}
+    \item 先随便骑，录下视频，摔100跤
+    \item 回家看完所有视频，\textbf{一次性}总结出最佳姿势
+    \item 直接用公式算，不需要调学习率
+    \item 优点：数据利用效率高；缺点：要等收集完数据
+\end{itemize}
+\end{example}
+
+\begin{theorem}[LSTD解]
+$\theta^* = A^{-1}b$，其中：
+\[
+A = \mathbb{E}[\phi(s)(\phi(s) - \gamma\phi(s'))^T], \quad b = \mathbb{E}[\phi(s)r]
+\]
+\end{theorem}
+
+\begin{example}[LSTD公式的直觉——最小二乘]
+LSTD本质上是在解一个\textbf{最小二乘问题}：
+
+"找一个线性函数$V_\theta(s) = \theta^T \phi(s)$，使得它尽可能满足Bellman方程"
+
+就像高中学的线性回归：给定数据点，找一条直线最好地拟合它们。
+
+只不过这里的"数据点"是$(s, r + \gamma V(s'))$，我们要拟合的是Bellman方程。
+\end{example}
+
+\begin{keypoint}[LSTD的优势]
+\begin{enumerate}
+    \item \textbf{数据高效}：固定数据集，不需要在线交互
+    \item \textbf{无学习率}：直接求解，不用调参
+    \item \textbf{Off-policy}：数据可来自任何策略
+\end{enumerate}
+
+代价：$O(d^2)$内存，$O(d^3)$计算（$d$是特征维度）。
+\end{keypoint}
+
+\begin{example}[什么时候用LSTD]
+\textbf{适合LSTD的场景}：
+\begin{itemize}
+    \item 你有一批历史数据（比如过去的用户行为日志）
+    \item 不能在线交互（比如医疗决策，不能随便试）
+    \item 特征维度不太高（$d < 1000$）
+\end{itemize}
+
+\textbf{不适合LSTD的场景}：
+\begin{itemize}
+    \item 可以持续收集新数据
+    \item 特征维度很高（$d > 10000$，矩阵求逆太慢）
+    \item 需要实时更新
+\end{itemize}
+\end{example}
+
+%=============================================================================
+\section{平均奖励MDP}
+%=============================================================================
+
+\begin{plainwords}
+之前是折扣奖励$\sum_t \gamma^t r_t$。另一种设定：平均奖励$\lim_{T\to\infty} \frac{1}{T}\sum_t r_t$。
+
+对"无限期运行"的系统更自然：服务器调度、库存管理等。
+\end{plainwords}
+
+\begin{definition}[平均奖励]
+\[
+\rho^\pi = \lim_{T\to\infty} \frac{1}{T} \mathbb{E}_\pi\left[\sum_{t=0}^{T-1} r_t\right]
+\]
+\end{definition}
+
+\begin{theorem}[平均奖励Bellman方程]
+\[
+\rho^* + h^*(s) = \max_a \left[R(s,a) + \sum_{s'} P(s'|s,a) h^*(s')\right]
+\]
+其中$h^*$是差分值函数。
+\end{theorem}
+
+\begin{theorem}[R-learning收敛]
+R-learning在遍历MDP上收敛到$(\rho^*, h^*)$。
+\end{theorem}
+
+%=============================================================================
+\section{GPU上的动态规划}
+%=============================================================================
+
+\begin{plainwords}
+值迭代每个状态更新是\textbf{独立的}——可以并行！
+\end{plainwords}
+
+\begin{calculation}[GPU加速]
+$|S| = 100000$，值迭代每次遍历所有状态：
+
+\textbf{CPU}：$100000$个状态顺序更新，约40ms
+
+\textbf{GPU}（1000核）：并行更新，约0.4ms
+
+加速100倍！（实际受内存带宽限制，约50倍）
+\end{calculation}
+
+\begin{keypoint}[向量化环境]
+不仅planning可以并行，\textbf{数据收集}也可以：
+
+同时运行1024个环境，一次收集1024个episode！
+
+这是Isaac Gym的核心思想：GPU原生仿真 + 向量化环境 → 训练速度提升10000倍。
+\end{keypoint}
+
+\begin{keypoint}[表格方法的极限]
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+问题 & $|S|$ & 可行？ \\
+\midrule
+井字棋 & $\sim 10^3$ & \checkmark \\
+GridWorld 100×100 & $10^4$ & \checkmark \\
+Atari（图像） & $\sim 10^{50000}$ & $\times$ \\
+围棋 & $\sim 10^{170}$ & $\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+当$|S| > 10^6$，即使GPU也无法存储值函数表 → 需要\textbf{函数逼近}（下周）
+\end{keypoint}
+
+%=============================================================================
+\section{收敛性理论大总结}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{l|c|c|c}
+\toprule
+算法 & 收敛性 & 条件 & 速度/界 \\
+\midrule
+\multicolumn{4}{c}{\textbf{Planning（已知模型）}} \\
+\midrule
+值迭代 & 全局 & $\gamma < 1$ & $O(\gamma^k)$ \\
+策略迭代 & 全局 & 有限MDP & 有限步 \\
+\midrule
+\multicolumn{4}{c}{\textbf{表格RL}} \\
+\midrule
+Q-learning & 全局 w.p.1 & 无限访问 & $O(1/k)$ \\
+SARSA & 全局 w.p.1 & GLIE & $O(1/k)$ \\
+TD($\lambda$) & 全局 & On-policy & 依赖$\lambda$ \\
+UCB-VI & Regret界 & Episodic & $\tilde{O}(\sqrt{H^3SAK})$ \\
+\midrule
+\multicolumn{4}{c}{\textbf{线性函数逼近}} \\
+\midrule
+Linear TD & 收敛 & On-policy & 放大$\frac{1}{\sqrt{1-\gamma^2}}$ \\
+Linear Q & \textbf{可能发散} & Off-policy & — \\
+GTD2 & 收敛 & Off-policy & $O(1/k)$ \\
+LSTD & 闭式解 & 批量 & $O(\sqrt{d/n})$ \\
+\midrule
+\multicolumn{4}{c}{\textbf{Multi-Agent}} \\
+\midrule
+Minimax-Q & 纳什均衡 & 两人零和 & $O(\gamma^k)$ \\
+独立Q & \textbf{可能不收敛} & 一般和 & — \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{magicbox}
+\textbf{本讲核心信息}：
+\begin{enumerate}
+    \item \textbf{MDP = Bandit + 状态转移}，从单步决策到序贯决策
+    \item \textbf{Bellman方程}：$V^* = T^* V^*$，收缩映射保证唯一解
+    \item \textbf{UCB-VI}：把上周的UCB推广到MDP，Regret $\tilde{O}(\sqrt{H^3SAK})$
+    \item \textbf{Linear TD}：投影Bellman方程，误差被$(1-\gamma^2)^{-1/2}$放大
+    \item \textbf{Deadly Triad}：函数逼近 + Bootstrapping + Off-policy = 发散风险
+    \item \textbf{Simulation Lemma}：模型误差被$(1-\gamma)^{-2}$放大
+    \item \textbf{Performance Difference}：用$A^\pi$评估新策略（TRPO/PPO的理论基础）
+\end{enumerate}
+\end{magicbox}
+
+%=============================================================================
+\section*{课后练习}
+%=============================================================================
+
+\begin{enumerate}
+    \item \textbf{Bellman方程}：3状态MDP（状态1奖励1转到2，状态2奖励0以0.5概率留在2或转到3，状态3奖励2转到1），$\gamma=0.9$。解$V^*$。
+    
+    \item \textbf{收缩映射}：证明如果$T$是$\gamma$-收缩，则$T^n$是$\gamma^n$-收缩。
+    
+    \item \textbf{收敛速度}：$\gamma=0.99$时，值迭代需要多少次迭代将误差从100减到0.01？
+    
+    \item \textbf{Linear TD误差}：$\gamma=0.95$，最佳线性逼近误差为1。TD(0)的误差上界是多少？
+    
+    \item \textbf{Simulation Lemma}：$\gamma=0.99$，模型误差$\epsilon_P = \epsilon_R = 0.01$，$R_{max}=1$。策略次优性上界是多少？
+\end{enumerate}
+
+\subsection*{答案提示}
+
+\textbf{1.} 解方程组：$V(1) = 1 + 0.9V(2)$，$V(2) = 0.9(0.5V(2) + 0.5V(3))$，$V(3) = 2 + 0.9V(1)$。
+
+\textbf{2.} $\|T^n V - T^n V'\| \leq \gamma\|T^{n-1}V - T^{n-1}V'\| \leq \cdots \leq \gamma^n\|V-V'\|$。
+
+\textbf{3.} $0.99^k < 0.0001$，$k > \frac{\ln 10^6}{\ln(1/0.99)} = \frac{13.8}{0.01} = 1380$次。
+
+\textbf{4.} $\frac{1}{\sqrt{1-0.95^2}} = \frac{1}{\sqrt{0.0975}} = 3.2$。误差上界$\leq 3.2$。
+
+\textbf{5.} $\frac{2}{0.01^2}(0.01 + 0.99 \times 0.01 \times 100) = 20000 \times 1.01 \approx 20200$。
+
+\end{document}

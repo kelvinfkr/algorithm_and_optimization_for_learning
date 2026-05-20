@@ -152,8 +152,7 @@
 \begin{itemize}
     \item 最大熵 $\Rightarrow$ 指数族分布
     \item 变分推断 $\Rightarrow$ ELBO
-    \item HJB方程 $\Rightarrow$ Bellman方程（RL的核心！）
-    \item 伴随方法 $\Rightarrow$ 反向传播
+    \item E-L 的 $\lambda$ $\Rightarrow$ Pontryagin costate $\Rightarrow$ HJB 的 $\nabla_x V$（贯穿全章的"$\lambda$ 主线"）
 \end{itemize}
 
 \end{blackboard}
@@ -170,11 +169,7 @@
 
 \textbf{第五部分}：信息瓶颈（15min）
 
-\textbf{第六部分}：最优控制与HJB（20min）
-
-\textbf{第七部分}：HJB→Bellman，伴随→反向传播（20min）
-
-\textbf{第八部分}：实验（30min）
+\textbf{第六部分}：最优控制与HJB（25min）
 
 \end{blackboard}
 
@@ -302,315 +297,196 @@ D_{\text{KL}}[p \| q] = \int p(x) \log \frac{p(x)}{q(x)} \, dx
 \end{blackboard}
 
 %========================================
-\section{Euler-Lagrange方程：泛函的极值条件}
+\section{Euler-Lagrange方程：泛函的极值条件}\label{sec:euler-lagrange}
 %========================================
 
-\begin{blackboard}[变分的概念]
+\begin{blackboard}[策略：泛函优化作为约束优化]
 
-\textbf{普通微分}：$x \to x + \epsilon$
+E-L 方程有两条推导路线。我们\textbf{先走}有限维约束优化那条
+（拉格朗日乘子法），\textbf{再}用经典变分法 $\delta J = 0$ 验证。
 
+\textbf{为什么这么排}？
+\begin{itemize}
+    \item 离散化把问题降回有限维——大一多元微积分就够用
+    \item 乘子 $\lambda_k$ 不是辅助记号——连续极限下\textbf{它就是物理动量} $p = \partial L/\partial \dot q$
+    \item 这套机器后面 HJB 节直接复用：$\lambda \to $ costate
+\end{itemize}
+
+\textbf{目标}：泛函
 \[
-df = f(x + \epsilon) - f(x) \approx f'(x) \cdot \epsilon
+J[q] = \int_{t_0}^{t_1} L(q, \dot q, t)\, dt
 \]
-
-\textbf{泛函的变分}：$y(x) \to y(x) + \epsilon \eta(x)$
-
-其中 $\eta(x)$ 是``扰动函数''，$\eta(a) = \eta(b) = 0$（边界不动）
-
-\[
-\delta J = J[y + \epsilon\eta] - J[y]
-\]
-
-\textbf{极值条件}：对所有扰动 $\eta$，$\delta J = 0$
+取极值的必要条件。
 
 \end{blackboard}
 
-\begin{blackboard}[推导Euler-Lagrange方程]
+\begin{blackboard}[Step 1：时间离散化，位置与速度独立成变量]
 
-\textbf{设泛函}：$J[y] = \int_a^b F(y, y', x) \, dx$
+\textbf{时间剖分}：$t_k = t_0 + k\,\Delta t$，$k = 0, 1, \ldots, N$，$\Delta t = (t_1-t_0)/N$。
 
-\textbf{扰动}：$\tilde{y}(x) = y(x) + \epsilon \eta(x)$
+\textbf{变量}：位置 $q_k \approx q(t_k)$，速度 $v_k \approx \dot q(t_k)$。
 
+\textbf{关键}：把 $q_k$ 和 $v_k$ 当作\textbf{独立变量}处理。它们之间的关系
 \[
-J[y + \epsilon\eta] = \int_a^b F(y + \epsilon\eta, y' + \epsilon\eta', x) \, dx
+v_k = \frac{q_{k+1} - q_k}{\Delta t}
+\]
+现在变成\textbf{显式约束}，而不是定义。这一招就是后面 $\lambda_k$ 出场的舞台。
+
+\textbf{离散作用量}：
+\[
+J(\{q_k\}, \{v_k\}) = \sum_{k=0}^{N-1} L(q_k, v_k, t_k)\,\Delta t
 \]
 
-\textbf{Taylor展开}：
+\textbf{运动学约束}（每个时间间隔一条）：
 \[
-F(y + \epsilon\eta, y' + \epsilon\eta', x) \approx F + \epsilon\eta \frac{\partial F}{\partial y} + \epsilon\eta' \frac{\partial F}{\partial y'}
+g_k := q_{k+1} - q_k - \Delta t\,v_k = 0,\qquad k = 0, 1, \ldots, N-1
 \]
-
-\textbf{变分}：
-\[
-\delta J = \epsilon \int_a^b \left( \eta \frac{\partial F}{\partial y} + \eta' \frac{\partial F}{\partial y'} \right) dx
-\]
+共 $N$ 条等式约束。边界 $q_0, q_N$ 由初/末位置固定。
 
 \end{blackboard}
 
-\begin{blackboard}[推导（续）：分部积分]
+\begin{blackboard}[Step 2：拉格朗日乘子绑定运动学约束]
 
-\textbf{对第二项分部积分}：
-
+每条约束 $g_k = 0$ 引入一个乘子 $\lambda_k$，构造\textbf{有限维拉格朗日函数}：
 \[
-\int_a^b \eta' \frac{\partial F}{\partial y'} \, dx = \left[ \eta \frac{\partial F}{\partial y'} \right]_a^b - \int_a^b \eta \frac{d}{dx}\left( \frac{\partial F}{\partial y'} \right) dx
+\mathcal{L}(\{q_k\}, \{v_k\}, \{\lambda_k\})
+= \sum_{k=0}^{N-1} L(q_k, v_k, t_k)\,\Delta t
++ \sum_{k=0}^{N-1}\lambda_k\bigl(q_{k+1} - q_k - \Delta t\,v_k\bigr)
 \]
+\textbf{这是一个标准的大一级别多元函数}——变量数 $3N+1$（$N+1$ 个 $q_k$，$N$ 个 $v_k$，$N$ 个 $\lambda_k$）。
+做的事情和"用拉格朗日乘子求带约束极值"一模一样。
 
-边界项 $= 0$（因为 $\eta(a) = \eta(b) = 0$）
-
-\textbf{代入}：
-\[
-\delta J = \epsilon \int_a^b \eta(x) \left( \frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} \right) dx
-\]
-
-\textbf{极值条件}：对所有 $\eta$，$\delta J = 0$
-
-$\Rightarrow$ 括号内必须为零！
+接下来只有一件事：\textbf{对每个变量求偏导，设为零}。
 
 \end{blackboard}
 
-\begin{blackboard}[Euler-Lagrange方程]
+\begin{blackboard}[Step 3：KKT 条件——三组方程]
 
-\begin{keypoint}[Euler-Lagrange方程]
+\textbf{对 $v_k$ 求偏导}（$k = 0, \ldots, N-1$）：
 \[
-\boxed{\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0}
+\frac{\partial \mathcal{L}}{\partial v_k}
+= \frac{\partial L}{\partial v_k}\bigg|_k \Delta t \;-\; \lambda_k\,\Delta t = 0
+\quad\Longrightarrow\quad
+\boxed{\,\lambda_k = \frac{\partial L}{\partial v_k}\bigg|_k\,}
 \]
-\end{keypoint}
+\textbf{这就是共轭动量}。$\lambda$ 在这一步从"约束乘子"获得了物理身份。
 
-\textbf{这是泛函 $J[y] = \int F(y, y', x) \, dx$ 取极值的必要条件}
+\textbf{对内部点 $q_k$ 求偏导}（$1 \le k \le N-1$，$q_k$ 同时出现在第 $k$ 项 $L$ 和约束 $g_{k-1}, g_k$ 里）：
+\[
+\frac{\partial \mathcal{L}}{\partial q_k}
+= \frac{\partial L}{\partial q_k}\bigg|_k\,\Delta t \;-\; \lambda_k \;+\; \lambda_{k-1} = 0
+\]
+整理：
+\[
+\boxed{\,\frac{\lambda_k - \lambda_{k-1}}{\Delta t} = \frac{\partial L}{\partial q_k}\bigg|_k\,}
+\]
+\textbf{乘子的离散时间导数等于 $L$ 对位置的偏导}——这就是即将浮现的 E-L 方程。
 
-\textbf{类比}：
+\textbf{对 $\lambda_k$ 求偏导}：
+\[
+\frac{\partial \mathcal{L}}{\partial \lambda_k} = q_{k+1} - q_k - \Delta t\,v_k = 0
+\]
+恢复运动学约束（这一组等式只是把 $v_k$ 和 $q_k$ 关联起来）。
+
+\end{blackboard}
+
+\begin{blackboard}[Step 4：连续极限 $\to$ Euler-Lagrange 方程]
+
+$\Delta t \to 0$ 时：
+\[
+\lambda_k \to p(t),\qquad v_k \to \dot q(t),\qquad \frac{\lambda_k-\lambda_{k-1}}{\Delta t} \to \dot p(t)
+\]
+KKT 三式分别变成：
+\begin{align*}
+\text{(I)}\quad & p = \frac{\partial L}{\partial \dot q} &&\text{（共轭动量定义）}\\
+\text{(II)}\quad & \dot p = \frac{\partial L}{\partial q} &&\text{（动量演化）}\\
+\text{(III)}\quad & \dot q = v &&\text{（运动学约束）}
+\end{align*}
+把 (I) 代入 (II) 消去 $p$：
+\[
+\frac{d}{dt}\frac{\partial L}{\partial \dot q} = \frac{\partial L}{\partial q}
+\]
+
+即
+\[
+\boxed{\;\frac{d}{dt}\frac{\partial L}{\partial \dot q_i} - \frac{\partial L}{\partial q_i} = 0\;}
+\]
+这就是 \textbf{Euler-Lagrange 方程}。
+\textbf{物理读法}：\textbf{动量随时间的变化率等于 $L$ 对位置的偏导}——\textbf{广义牛顿第二定律}。
+
+\end{blackboard}
+
+\begin{keypoint}[本质洞察：E-L 方程是拉格朗日乘子的演化方程]
+
+我们不是"凑出"了 E-L 方程，而是把约束优化的 KKT 条件取了连续极限。
+其中乘子 $\lambda_k \to p(t)$ 是核心——它在五种语言里有五个名字：
 \begin{center}
 \begin{tabular}{c|c}
-普通优化 & 泛函优化 \\
-\hline
-$\nabla f(x^*) = 0$ & $\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0$ \\
-代数方程组 & 微分方程
+\toprule
+语言 & $\lambda$ 的名字 \\
+\midrule
+约束优化 & 拉格朗日乘子 \\
+经典力学 & 共轭动量 $p = \partial L / \partial \dot q$ \\
+变分法 & 作用量梯度 $\partial S / \partial q$ \\
+最优控制 & costate / 伴随变量（HJB / PMP 节） \\
+\bottomrule
 \end{tabular}
 \end{center}
+\textbf{这门课接下来所有的"$\lambda$"都是这一个 $\lambda$}。
 
-\textbf{泛函优化变成了求解微分方程！}
-
-\end{blackboard}
-
-\begin{blackboard}[另一种推导：离散化 + 拉格朗日乘子]
-
-\textbf{思路}：把连续问题离散化，用普通优化方法，再取极限
-
-\textbf{为什么这样做？}
-\begin{itemize}
-    \item 离散优化更直观（有限维）
-    \item 用熟悉的拉格朗日乘子法
-    \item 取极限得到连续结果
-    \item 数值方法的理论基础
-\end{itemize}
-
-\end{blackboard}
-
-\begin{blackboard}[离散化设置]
-
-\textbf{把区间 $[a, b]$ 分成 $N$ 份}：
-
-$x_0 = a, \; x_1 = a + h, \; x_2 = a + 2h, \; \ldots, \; x_N = b$
-
-其中 $h = \frac{b - a}{N}$（步长）
-
-\textbf{离散化函数}：$y(x) \to (y_0, y_1, y_2, \ldots, y_N)$
-
-\textbf{离散化导数}：$y'(x_i) \approx \frac{y_{i+1} - y_i}{h}$
-
-\textbf{离散化积分}：$\int_a^b F \, dx \approx \sum_{i=0}^{N-1} F_i \cdot h$
-
-\begin{center}
-\begin{tikzpicture}[scale=1.5]
-    \draw[->] (0, 0) -- (4.5, 0) node[right] {$x$};
-    \draw[->] (0, 0) -- (0, 2.5) node[above] {$y$};
-    
-    % 连续曲线
-    \draw[blue, thick, domain=0:4, samples=50] plot (\x, {0.5 + 0.8*sin(0.8*\x r)});
-    
-    % 离散点
-    \foreach \i in {0, 1, 2, 3, 4} {
-        \fill[red] (\i, {0.5 + 0.8*sin(0.8*\i r)}) circle (2pt);
-    }
-    
-    % 标注
-    \node[below] at (0, 0) {$x_0$};
-    \node[below] at (1, 0) {$x_1$};
-    \node[below] at (2, 0) {$x_2$};
-    \node[below] at (4, 0) {$x_N$};
-    
-    \draw[<->] (0, -0.3) -- (1, -0.3) node[midway, below] {$h$};
-\end{tikzpicture}
-\end{center}
-
-\end{blackboard}
-
-\begin{blackboard}[离散化泛函]
-
-\textbf{连续泛函}：$J[y] = \int_a^b F(y, y', x) \, dx$
-
-\textbf{离散泛函}：
-\[
-J_N(y_0, y_1, \ldots, y_N) = \sum_{i=0}^{N-1} F\left( y_i, \frac{y_{i+1} - y_i}{h}, x_i \right) \cdot h
-\]
-
-\textbf{边界条件}：$y_0 = y(a)$，$y_N = y(b)$ 固定
-
-\textbf{优化变量}：$y_1, y_2, \ldots, y_{N-1}$（内部点）
-
-\textbf{这是一个普通的 $(N-1)$ 维优化问题！}
-
-可以用 $\nabla J_N = 0$ 求极值
-
-\end{blackboard}
-
-\begin{blackboard}[对内部点求导]
-
-\textbf{对 $y_k$（$1 \leq k \leq N-1$）求偏导}：
-
-$y_k$ 出现在两项中：
-\begin{itemize}
-    \item 第 $k-1$ 项：$F\left( y_{k-1}, \frac{y_k - y_{k-1}}{h}, x_{k-1} \right)$
-    \item 第 $k$ 项：$F\left( y_k, \frac{y_{k+1} - y_k}{h}, x_k \right)$
-\end{itemize}
-
-\textbf{记}：$F_i = F\left( y_i, \frac{y_{i+1} - y_i}{h}, x_i \right)$
-
-\textbf{求导}：
-\[
-\frac{\partial J_N}{\partial y_k} = \frac{\partial F_{k-1}}{\partial y_k} \cdot h + \frac{\partial F_k}{\partial y_k} \cdot h
-\]
-
-\end{blackboard}
-
-\begin{blackboard}[展开偏导数]
-
-\textbf{对于 $F_{k-1}$}：$y_k$ 只出现在``导数''位置
-
-\[
-\frac{\partial F_{k-1}}{\partial y_k} = \frac{\partial F}{\partial y'}\bigg|_{k-1} \cdot \frac{\partial}{\partial y_k}\left( \frac{y_k - y_{k-1}}{h} \right) = \frac{\partial F}{\partial y'}\bigg|_{k-1} \cdot \frac{1}{h}
-\]
-
-\textbf{对于 $F_k$}：$y_k$ 出现在两个位置
-
-\[
-\frac{\partial F_k}{\partial y_k} = \frac{\partial F}{\partial y}\bigg|_k + \frac{\partial F}{\partial y'}\bigg|_k \cdot \frac{\partial}{\partial y_k}\left( \frac{y_{k+1} - y_k}{h} \right) = \frac{\partial F}{\partial y}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_k \cdot \frac{1}{h}
-\]
-
-\end{blackboard}
-
-\begin{blackboard}[极值条件]
-
-\textbf{$\frac{\partial J_N}{\partial y_k} = 0$}：
-
-\[
-\frac{\partial F}{\partial y'}\bigg|_{k-1} \cdot \frac{1}{h} \cdot h + \left( \frac{\partial F}{\partial y}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_k \cdot \frac{1}{h} \right) \cdot h = 0
-\]
-
-\textbf{简化}：
-\[
-\frac{\partial F}{\partial y'}\bigg|_{k-1} + \frac{\partial F}{\partial y}\bigg|_k \cdot h - \frac{\partial F}{\partial y'}\bigg|_k = 0
-\]
-
-\textbf{整理}：
-\[
-\frac{\partial F}{\partial y}\bigg|_k = \frac{1}{h}\left( \frac{\partial F}{\partial y'}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_{k-1} \right)
-\]
-
-\end{blackboard}
-
-\begin{blackboard}[取连续极限]
-
-\textbf{右边是差分}：
-\[
-\frac{1}{h}\left( \frac{\partial F}{\partial y'}\bigg|_k - \frac{\partial F}{\partial y'}\bigg|_{k-1} \right) = \frac{\frac{\partial F}{\partial y'}(x_k) - \frac{\partial F}{\partial y'}(x_{k-1})}{h}
-\]
-
-\textbf{当 $h \to 0$ 时}，差商变导数：
-\[
-\lim_{h \to 0} \frac{\frac{\partial F}{\partial y'}(x + h) - \frac{\partial F}{\partial y'}(x)}{h} = \frac{d}{dx}\frac{\partial F}{\partial y'}
-\]
-
-\textbf{因此}：
-\[
-\frac{\partial F}{\partial y} = \frac{d}{dx}\frac{\partial F}{\partial y'}
-\]
-
-\begin{keypoint}[离散推导得到E-L方程]
-\[
-\boxed{\frac{\partial F}{\partial y} - \frac{d}{dx}\frac{\partial F}{\partial y'} = 0}
-\]
-和变分法得到的\textbf{完全一样}！
 \end{keypoint}
 
-\end{blackboard}
+\begin{blackboard}[另一种推导：经典变分法（$\delta J = 0$）]
 
-\begin{blackboard}[数值例子：离散最短路径]
+完整起见，给出经典推导。这条路不离散化，直接在函数空间求极值。
 
-\textbf{问题}：从 $(0, 0)$ 到 $(1, 1)$ 的最短路径
+\textbf{变分概念}：普通微分扰动 $x \to x + \epsilon$；
+泛函变分则扰动整个函数 $q(t) \to q(t) + \epsilon\,\eta(t)$，端点固定 $\eta(t_0) = \eta(t_1) = 0$。
 
-\textbf{离散化}：$N = 4$，$h = 0.25$
-
-点：$(0, y_0), (0.25, y_1), (0.5, y_2), (0.75, y_3), (1, y_4)$
-
-边界：$y_0 = 0$，$y_4 = 1$
-
-\textbf{离散长度}：
+\textbf{一阶变分}：
 \[
-L_4 = \sum_{i=0}^{3} \sqrt{h^2 + (y_{i+1} - y_i)^2} = \sum_{i=0}^{3} \sqrt{0.0625 + (y_{i+1} - y_i)^2}
+\delta J = \epsilon \int_{t_0}^{t_1}\left( \frac{\partial L}{\partial q}\eta + \frac{\partial L}{\partial \dot q}\dot\eta \right) dt
 \]
 
-\textbf{对 $y_1$ 求导}：
+\textbf{第二项分部积分}（端点项因 $\eta(t_0) = \eta(t_1) = 0$ 而消失）：
 \[
-\frac{\partial L_4}{\partial y_1} = \frac{y_1 - y_0}{\sqrt{0.0625 + (y_1 - y_0)^2}} - \frac{y_2 - y_1}{\sqrt{0.0625 + (y_2 - y_1)^2}}
+\int \frac{\partial L}{\partial \dot q}\dot\eta\, dt = -\int \frac{d}{dt}\frac{\partial L}{\partial \dot q}\,\eta\, dt
 \]
 
-\end{blackboard}
+\textbf{合并}：
+\[
+\delta J = \epsilon \int_{t_0}^{t_1} \eta\,\left(\frac{\partial L}{\partial q} - \frac{d}{dt}\frac{\partial L}{\partial \dot q}\right) dt
+\]
 
-\begin{blackboard}[数值例子（续）]
-
-\textbf{极值条件}：$\frac{\partial L_4}{\partial y_k} = 0$ 对 $k = 1, 2, 3$
-
-\textbf{令}：$s_i = \frac{y_{i+1} - y_i}{\sqrt{0.0625 + (y_{i+1} - y_i)^2}}$（归一化斜率）
-
-条件变成：$s_0 = s_1 = s_2 = s_3$
-
-\textbf{即}：所有线段斜率相同！
-
-\textbf{解}：$y_1 = 0.25$，$y_2 = 0.5$，$y_3 = 0.75$
-
-（等差数列 $\Rightarrow$ \textbf{直线}！）
-
-\textbf{验证}：$L_4 = 4 \times \sqrt{0.0625 + 0.0625} = 4 \times 0.354 = \mathbf{1.414}$
-
-和 $\sqrt{2}$ 一致！
+对所有满足边界条件的 $\eta$，$\delta J = 0$ $\Longrightarrow$ 括号内必为零：
+\[
+\frac{d}{dt}\frac{\partial L}{\partial \dot q} - \frac{\partial L}{\partial q} = 0\quad\checkmark
+\]
+和拉格朗日乘子法\textbf{殊途同归}。
 
 \end{blackboard}
 
-\begin{blackboard}[两种推导方法的比较]
-
+\begin{blackboard}[两种推导方法对比]
 \begin{center}
 \begin{tabular}{c|c|c}
-& \textbf{变分法} & \textbf{离散化} \\
-\hline
-起点 & 函数空间的扰动 & 有限维优化 \\
-工具 & 分部积分 & 偏导数链式法则 \\
-极限 & 无（直接得到） & $h \to 0$ \\
-直觉 & 数学上更优美 & 更接近数值计算 \\
-应用 & 理论分析 & 数值方法设计
+\toprule
+ & \textbf{拉格朗日乘子法} & \textbf{经典变分法} \\
+\midrule
+起点 & 离散化 + 显式运动学约束 & 函数空间的扰动 \\
+工具 & KKT 条件 & 分部积分 \\
+$\lambda$ 角色 & \textbf{共轭动量 $p$}（核心物理量） & 不显式出现 \\
+连续极限 & $\Delta t \to 0$ & 无（直接得到） \\
+后续衔接 & 直通 HJB / costate / 伴随 & 适合纯理论分析 \\
+\bottomrule
 \end{tabular}
 \end{center}
 
-\textbf{两条路殊途同归}：都得到 E-L 方程！
-
-\textbf{离散方法的额外好处}：
-\begin{itemize}
-    \item 直接给出数值算法（离散E-L方程组）
-    \item 对于复杂问题，可能更容易推导
-    \item 和现代优化方法（如自动微分）的联系更紧密
-\end{itemize}
+\textbf{选哪条}？两条都得到同一个 E-L 方程，但拉格朗日乘子法
+\textbf{保留了 $\lambda = p$ 这条物理线索}——后面 Hamilton 力学、最优控制（HJB / PMP）都用得到。经典变分法更简洁，
+但 $\lambda$ 隐藏在分部积分里没有显式出现。
 
 \end{blackboard}
+
 
 \begin{blackboard}[例1：最短路径]
 
@@ -840,6 +716,114 @@ E_{\text{抛物线}} = \int_{-1}^{1} (0.5x^2 + 1) \sqrt{1 + x^2} \, dx \approx \
 \end{blackboard}
 
 %========================================
+% Hamilton原理与经典力学：从能量推出动力学
+%========================================
+
+\begin{blackboard}[Hamilton原理：动力学源于变分]
+
+E-L 之前的例子都是\textbf{几何/静力}泛函（路径长度、势能极小化）。
+但 E-L 真正诞生于\textbf{经典力学}——这是 Lagrange 1788 年的工作。
+
+\textbf{Hamilton 原理（1834）}：物理系统的真实轨迹 $q(t)$ 使\textbf{作用量}泛函取极值
+\[
+S[q] = \int_{t_0}^{t_1} L(q, \dot q, t)\, dt, \qquad L = T - V
+\]
+其中 $T$ 是动能、$V$ 是势能——都是\textbf{标量}。运动方程就是 E-L：
+\[
+\frac{d}{dt}\frac{\partial L}{\partial \dot q_i} - \frac{\partial L}{\partial q_i} = 0
+\]
+
+\textbf{奇迹}：你只要写出两个\textbf{标量}（$T$ 和 $V$），求几次偏导，运动方程就自动浮现——
+不画受力图、不分解矢量、不算约束反作用力。
+
+\end{blackboard}
+
+\begin{blackboard}[例5：单摆——牛顿 vs 拉格朗日（热身）]
+
+长度 $\ell$、质量 $m$ 的单摆，求 $\theta(t)$。
+
+\textbf{牛顿法}：画受力图。重力 $mg$ 竖直、张力 $T_\text{绳}$ 沿绳指向支点。
+\begin{itemize}
+    \item 切向分解：$m\ell\ddot\theta = -mg\sin\theta$
+    \item 径向：$T_\text{绳} - mg\cos\theta = m\ell\dot\theta^2$（要算，但和运动方程无关）
+\end{itemize}
+\textbf{必须}选对分解方向，\textbf{必须}手动丢掉张力。
+
+\textbf{拉格朗日法}：广义坐标 $\theta$，位置 $(\ell\sin\theta, -\ell\cos\theta)$，
+速度平方 $\dot x^2 + \dot y^2 = \ell^2\dot\theta^2$。直接写：
+\[
+T = \tfrac{1}{2}m\ell^2\dot\theta^2,\qquad
+V = -mg\ell\cos\theta,\qquad
+L = \tfrac{1}{2}m\ell^2\dot\theta^2 + mg\ell\cos\theta
+\]
+代 E-L：
+\[
+\frac{d}{dt}(m\ell^2\dot\theta) + mg\ell\sin\theta = 0
+\quad\Rightarrow\quad
+\ddot\theta = -\tfrac{g}{\ell}\sin\theta\ \checkmark
+\]
+\textbf{张力压根没出现}——约束 $|r|=\ell$ 被广义坐标 $\theta$ 内化掉了。
+单摆里两种方法难度差不多；下一个例子（双摆）会把差距拉开一个量级。
+
+\end{blackboard}
+
+\begin{blackboard}[单摆数值：非线性的真实影响]
+
+$\ell = 1$ m，$g = 9.81$ m/s$^2$。小角度周期 $T_0 = 2\pi\sqrt{\ell/g} = 2.006$ s。
+
+数值积分 $\ddot\theta = -\frac{g}{\ell}\sin\theta$：
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+初始角 $\theta_0$ & 数值周期 & 偏差 \\
+\midrule
+$10°$  & 2.010 s & +0.2\% \\
+$30°$  & 2.041 s & +1.7\% \\
+$60°$  & 2.165 s & +7.9\% \\
+$90°$  & 2.368 s & +18.1\% \\
+$150°$ & 3.498 s & +74.4\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+大角度更慢——非线性的实证。E-L 方程本身没变，但解的行为远离了小角度线性化的图景。
+
+\end{blackboard}
+
+% --------------------------------------------
+% 此处衔接配套幻灯片：
+%   - 进阶实战：混沌之源——双摆（Newton 法困难 + Lagrangian 干净推导）
+%   - 大图景：物理学拉格朗日量表（牛顿 → SR → Maxwell → GR → QFT）
+% --------------------------------------------
+
+
+\begin{insight}[衔接 HJB：从 Lagrangian 到 Hamiltonian]
+
+连续极限下 $\lambda \to p$。做 \textbf{Legendre 变换}定义 Hamiltonian：
+\[
+H(q, p, t) := p^\top \dot q - L(q, \dot q, t)\Big|_{\dot q = \dot q(q, p, t)}
+\]
+（自治保守系统：$H = T + V$ 就是总能量。）E-L 方程化为对称的一阶系统：
+\[
+\dot q = \frac{\partial H}{\partial p},\qquad
+\dot p = -\frac{\partial H}{\partial q}
+\]
+
+后面第 \ref{sec:hjb} 节的 HJB 方程
+\[
+-\frac{\partial V}{\partial t} = \min_u\left\{\ell(x,u) + \nabla_x V \cdot f(x, u)\right\}
+\]
+就是这套对偶推到\textbf{最优控制}的版本：
+\[
+L \;\leftrightarrow\; \ell(x, u),\qquad
+p \;\leftrightarrow\; \nabla_x V,\qquad
+H \;\leftrightarrow\; \min_u\{\ell + p\cdot f\}.
+\]
+
+\textbf{变分法、约束优化、Hamilton 力学、最优控制——同一个故事的四种语言。}
+你现在写的 $\lambda_k$，就是这个故事的开头。
+\end{insight}
+
+%========================================
 \section{最大熵原理：约束下的分布选择}
 %========================================
 
@@ -1058,6 +1042,87 @@ D_{\text{KL}}(p \| q) = \int p(x) \log \frac{p(x)}{q(x)} \, dx = \mathbb{E}_{p}\
 
 \end{blackboard}
 
+\begin{blackboard}[Huffman 例子（一）：先看最优编码长什么样]
+
+\textbf{设定}：4 个符号 $\{A, B, C, D\}$。
+
+真实分布 $p$ 和误以为的分布 $q$：
+\begin{center}
+\begin{tabular}{c|cccc}
+\toprule
+ & $A$ & $B$ & $C$ & $D$ \\
+\midrule
+$p$ & $\tfrac{1}{2}$ & $\tfrac{1}{4}$ & $\tfrac{1}{8}$ & $\tfrac{1}{8}$ \\
+$q$ & $\tfrac{1}{8}$ & $\tfrac{1}{8}$ & $\tfrac{1}{4}$ & $\tfrac{1}{2}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+（注意 $q$ 把 $A, B$ 当稀有事件，$D$ 当最常见——和 $p$ 几乎反着来。）
+
+\textbf{根据 $p$ 构造 Huffman 编码}：合并两个最小 $\tfrac{1}{8}\to\tfrac{1}{4}$，再合并两个 $\tfrac{1}{4}\to\tfrac{1}{2}$，再合并两个 $\tfrac{1}{2}$：
+\[
+\text{码表 (p-optimal)}:\quad A: \mathtt{0},\ \ B: \mathtt{10},\ \ C: \mathtt{110},\ \ D: \mathtt{111}
+\]
+平均长度（在 $p$ 上）：
+\[
+\bar\ell_p = \tfrac{1}{2}\!\cdot\!1 + \tfrac{1}{4}\!\cdot\!2 + \tfrac{1}{8}\!\cdot\!3 + \tfrac{1}{8}\!\cdot\!3 = 1.75 \text{ bits}\ =\ H(p)\ \checkmark
+\]
+（恰好相等：$p$ 是 \textbf{dyadic 分布}，Huffman 严格达到熵下界。）
+
+\end{blackboard}
+
+\begin{blackboard}[Huffman 例子（二）：用错码本要多花多少 bits]
+
+\textbf{根据 $q$ 构造 Huffman 编码}：同样的算法，但合并顺序变了——
+两个 $\tfrac{1}{8}$（$A,B$）合并成 $\tfrac{1}{4}$，再和 $\tfrac{1}{4}$（$C$）合并成 $\tfrac{1}{2}$，再和 $\tfrac{1}{2}$（$D$）合并：
+\[
+\text{码表 (q-optimal)}:\quad D: \mathtt{0},\ \ C: \mathtt{10},\ \ A: \mathtt{110},\ \ B: \mathtt{111}
+\]
+码长：$A\!:\!3,\ B\!:\!3,\ C\!:\!2,\ D\!:\!1$。
+
+\textbf{用这套（错的）$q$-码本编码 $p$ 的数据}——这正是 KL 描述的场景。
+平均比特数（在 $p$ 上）：
+\[
+\bar\ell_q^{(p)} = \tfrac{1}{2}\!\cdot\!3 + \tfrac{1}{4}\!\cdot\!3 + \tfrac{1}{8}\!\cdot\!2 + \tfrac{1}{8}\!\cdot\!1
+= \tfrac{3}{2} + \tfrac{3}{4} + \tfrac{1}{4} + \tfrac{1}{8}
+= 2.625 \text{ bits}
+\]
+
+\textbf{多花的 bits}：
+\[
+\bar\ell_q^{(p)} - \bar\ell_p = 2.625 - 1.75 = \boxed{\,0.875\text{ bits / 符号}\,}
+\]
+
+\textbf{直接算 $D_{\mathrm{KL}}(p\|q)$ 验证}：
+\[
+D_{\mathrm{KL}}(p\|q) = \sum_i p_i\log_2\!\frac{p_i}{q_i}
+= \tfrac{1}{2}\log_2 4 + \tfrac{1}{4}\log_2 2 + \tfrac{1}{8}\log_2 \tfrac{1}{2} + \tfrac{1}{8}\log_2 \tfrac{1}{4}
+\]
+\[
+= 1 + \tfrac{1}{4} - \tfrac{1}{8} - \tfrac{1}{4} = \boxed{\,0.875\text{ bits}\,}\quad\checkmark
+\]
+\textbf{两个 0.875 完全一致}——KL 散度的操作含义。
+
+\end{blackboard}
+
+\begin{keypoint}[为什么是 $\log(p/q)$？]
+
+Shannon 编码定理：用分布 $q$ 编码时，最优码长是 $\ell_i = -\log_2 q_i$。
+\begin{itemize}
+    \item 用 $p$ 的码本编 $p$ 的数据：每符号 $-\log_2 p_i$ bits，平均 $H(p)$
+    \item 用 $q$ 的码本编 $p$ 的数据：每符号 $-\log_2 q_i$ bits，平均 $\mathbb{E}_p[-\log_2 q] = H(p, q)$（\textbf{交叉熵}）
+\end{itemize}
+两者之差就是 KL：
+\[
+D_{\mathrm{KL}}(p\|q) \;=\; H(p,q) - H(p) \;=\; \mathbb{E}_p\!\left[\log_2\!\tfrac{p}{q}\right]
+\]
+\textbf{操作翻译}：每 1000 个 $p$-符号，用 $q$-码本要比用 $p$-码本多花
+$1000 \times 0.875 = 875$ bits——这就是"知识错位"的客观代价。
+
+\textbf{深度学习挂钩}：分类问题里的交叉熵损失 $-\sum y_i \log \hat p_i$ 就是 $H(p, q)$
+减去常数 $H(p)$ 后剩下的 $D_{\mathrm{KL}}(p\|q)$——最小化交叉熵 = 最小化 KL。
+\end{keypoint}
+
 \begin{blackboard}[KL散度的数值例子]
 
 \textbf{两个高斯分布}：$p = \mathcal{N}(0, 1)$，$q = \mathcal{N}(\mu, \sigma^2)$
@@ -1146,25 +1211,102 @@ D_{\text{KL}}(q \| p) &= \int q \log q \, d\mathbf{z} - \int q \log p(\mathbf{z}
 
 \end{blackboard}
 
-\begin{blackboard}[ELBO的两种形式]
+\begin{blackboard}[ELBO 的两种形式：同一量的两副面孔]
 
-\textbf{形式1}：
+\textbf{形式 1（能量 $+$ 熵 / 自由能视角）}：
 \[
-\text{ELBO} = \mathbb{E}_q[\log p(\mathbf{x}, \mathbf{z})] + H[q]
+\mathrm{ELBO}(q) = \mathbb{E}_q[\log p(\mathbf{x}, \mathbf{z})] + H[q]
 \]
 
-$= $ 联合对数似然的期望 $+$ $q$ 的熵
-
-\textbf{形式2}：
+\textbf{形式 2（重构 $-$ 正则 / 自编码器视角）}：
 \[
-\text{ELBO} = \mathbb{E}_q[\log p(\mathbf{x} | \mathbf{z})] - D_{\text{KL}}(q(\mathbf{z}) \| p(\mathbf{z}))
+\mathrm{ELBO}(q) = \mathbb{E}_q[\log p(\mathbf{x} | \mathbf{z})] - D_{\mathrm{KL}}(q(\mathbf{z}) \| p(\mathbf{z}))
 \]
 
-$= $ 重构项 $-$ 正则项
-
-\textbf{这正是 VAE 的损失函数！}
+\textbf{数学上完全等价}——一行就推完。把联合写成条件 $\times$ 先验：
+$\log p(\mathbf{x}, \mathbf{z}) = \log p(\mathbf{x}|\mathbf{z}) + \log p(\mathbf{z})$，代入形式 1：
+\[
+\underbrace{\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})]}_{\text{重构项}}
++ \underbrace{\mathbb{E}_q[\log p(\mathbf{z})] - \mathbb{E}_q[\log q(\mathbf{z})]}_{=\,-D_{\mathrm{KL}}(q\|p(\mathbf{z}))}
+\]
+就是形式 2。\textbf{但强调的东西完全不同}——下面三页详谈。
 
 \end{blackboard}
+
+\begin{blackboard}[形式 1 vs 形式 2：四个维度的对照]
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{p{0.20\linewidth}|p{0.35\linewidth}|p{0.35\linewidth}}
+\toprule
+ & \textbf{形式 1（能量 $+$ 熵）} & \textbf{形式 2（重构 $-$ 正则）} \\
+\midrule
+\textbf{物理类比} & Helmholtz 自由能 $F = U - TS$ & 率失真：rate $=$ KL，distortion $= -\mathbb{E}[\log p(\mathbf{x}|\mathbf{z})]$ \\
+\midrule
+\textbf{需要的输入} & 只需联合 $p(\mathbf{x}, \mathbf{z})$ & 必须显式分解 $p(\mathbf{x}|\mathbf{z}) \cdot p(\mathbf{z})$ \\
+\midrule
+\textbf{$\mathbf{z}$ 的地位} & 普通隐变量，无先验区分 & "潜变量"，有显式先验 $p(\mathbf{z})$ \\
+\midrule
+\textbf{易算的那一项} & $H[q]$：指数族 $q$ 有闭式（高斯 $\tfrac{1}{2}\log\det\Sigma + c$） & $D_{\mathrm{KL}}(q\|p(\mathbf{z}))$：高斯-高斯有闭式（VAE 招牌） \\
+\midrule
+\textbf{难算的那一项} & $\mathbb{E}_q[\log p(\mathbf{x},\mathbf{z})]$：MC 方差大 & $\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})]$：需要 reparameterization \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{两种形式的"易算项"是同一个东西的两种切法}——都是"关于 $q$ 自己或 $q$ 与先验之间的解析项"。
+指数族 $q$ 下这一项必有闭式；涉及生成模型的那一项必须采样。
+
+\end{blackboard}
+
+\begin{blackboard}[形式 1 vs 形式 2：优化时的行为差异]
+
+\textbf{形式 1}：能量低 $+$ $q$ 散开。没有显式的"$q$ 要靠近某个固定分布"压力——$q$ 只被联合似然牵引。
+
+\textbf{形式 2}：重构好 $+$ $q(\mathbf{z}|\mathbf{x})$ 不离先验 $p(\mathbf{z})$ 太远。
+这个"靠近先验"压力是 VAE 的\textbf{双刃剑}：
+\begin{itemize}
+    \item \textbf{后验崩溃}（posterior collapse）：当解码器足够强（如 PixelCNN/Transformer）时，
+    KL 项把 $q(\mathbf{z}|\mathbf{x})$ 拉到等于 $p(\mathbf{z})$，$\mathbf{z}$ 不传递任何关于 $\mathbf{x}$ 的信息——
+    VAE 退化成无 latent 的纯生成模型
+    \item $\beta$\textbf{-VAE}（Higgins 2017）：给 KL 项加权重 $\beta$；$\beta > 1$ 鼓励 disentangled latent，
+    $\beta < 1$ 缓解后验崩溃
+    \item \textbf{KL annealing}：训练早期把 KL 项权重从 $0$ 缓升到 $1$，让重构先学起来
+\end{itemize}
+
+\textbf{为什么形式 1 没有这个病}？形式 1 的熵项 $-\mathbb{E}_q[\log q]$ 鼓励 $q$ 散开，但
+\textbf{不指定散向哪里}。形式 2 把它拆成 $-\mathbb{E}_q[\log q] + \mathbb{E}_q[\log p(\mathbf{z})]$，
+第二项引入了"瞄准 $p(\mathbf{z})$"的指向性。
+\textbf{后验崩溃是形式 2 视角放大出来的工程问题}——不是 ELBO 本身的问题。
+
+\end{blackboard}
+
+\begin{keypoint}[选哪个？]
+
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{0.40\linewidth}|p{0.55\linewidth}}
+\toprule
+\textbf{场景} & \textbf{用哪个形式} \\
+\midrule
+理论分析、连接 KL/MaxEnt/统计力学 & 形式 1 \\
+平均场 VI（$q = \prod_i q_i$，每个 $H[q_i]$ 独立） & 形式 1 \\
+能量基模型（EBM）、Boltzmann 机 & 形式 1 \\
+Friston 自由能原理（神经科学） & 形式 1 \\
+\midrule
+写 VAE 代码 / 实现 encoder-decoder & 形式 2 \\
+$\beta$-VAE、disentanglement 研究 & 形式 2 \\
+Diffusion model（每步 KL 是相邻 timestep 间） & 形式 2 \\
+任何"有 encoder 和 decoder 两个网络"的设定 & 形式 2 \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.5em}
+\textbf{助记}：形式 1 长得像\textbf{物理}（能量减熵 $=$ 自由能），形式 2 长得像\textbf{工程}（信号 $-$ 正则）。
+做\textbf{理论}用 1，写\textbf{代码}用 2。
+
+\textbf{这正是 VAE 的损失函数（形式 2）}——下一页给出完整 VAE 损失。
+
+\end{keypoint}
 
 \begin{blackboard}[VAE损失函数的来源]
 
@@ -1322,7 +1464,7 @@ $I(Z; Y) = I(X; Y)$（如果 $Z$ 与 $Y$ 关系不变）
 \end{blackboard}
 
 %========================================
-\section{最优控制与HJB方程}
+\section{最优控制与HJB方程}\label{sec:hjb}
 %========================================
 
 \begin{blackboard}[最优控制问题]
@@ -1346,6 +1488,32 @@ $\phi$：终端代价，$L$：运行代价
 
 \end{blackboard}
 
+\begin{blackboard}[两条独立推导路线]
+
+E-L 方程我们走了两条路（拉格朗日乘子法 $+$ 经典变分法）。
+\textbf{HJB 同样有两条路，但角色不同}：
+
+\begin{itemize}
+    \item \textbf{Track A（变分法 / PMP）}：延续 E-L 节的乘子思路——
+    把动力学约束 $\dot x = f$ 当作"无穷多条等式约束"，用 $\lambda(t)$ 配对。
+    一阶必要条件给出 \textbf{Pontryagin 最大值原理}——一组 ODE。
+    \item \textbf{Track B（动态规划 / HJB）}：从 Bellman 最优性原理出发，
+    定义\textbf{值函数} $V(x, t)$，对其 Taylor 展开取连续极限。
+    得到一个 PDE。
+\end{itemize}
+
+\textbf{两条路殊途同归}：最后通过身份 $\lambda(t) = \nabla_x V(x(t), t)$ 汇合——
+\textbf{PMP 的 costate 就是 HJB 的 value 梯度}。这是前面 E-L 节那个 $\lambda$ 在控制问题里的化身。
+
+\textbf{为什么要走两条}？
+\begin{itemize}
+    \item PMP 给\textbf{单条最优轨迹}（ODE，无维度灾难）——model-based RL / DDP / iLQR / 神经 ODE
+    \item HJB 给\textbf{整个 value 场}（PDE，有维度灾难）——value-based RL / Bellman / TD / Q-learning
+\end{itemize}
+现实工程里两者都用。本节让你看见它们的统一性。
+
+\end{blackboard}
+
 \begin{blackboard}[具体例子：LQR问题]
 
 \textbf{线性动力学}：$\dot{\mathbf{x}} = A\mathbf{x} + B\mathbf{u}$
@@ -1365,7 +1533,70 @@ $J = \frac{1}{2}x(T)^2 + \frac{1}{2}\int_0^T (x^2 + u^2) \, dt$
 
 \end{blackboard}
 
-\begin{blackboard}[Bellman的最优性原理]
+\begin{blackboard}[Track A · Step 1：增广作用量与 Hamiltonian]
+
+E-L 节我们把"$v_k = (q_{k+1}-q_k)/\Delta t$"用乘子 $\lambda_k$ 绑定。
+现在把"$\dot x = f(x, u, t)$"用乘子 $\lambda(t)$ 绑定——\textbf{连续时间版本}。
+
+\textbf{增广作用量}：
+\[
+\bar J[x, u, \lambda] = \phi(x(T)) + \int_0^T \Big[L(x, u, t) + \lambda(t)^\top\!\big(f(x, u, t) - \dot x\big)\Big] dt
+\]
+
+\textbf{定义 Hamiltonian}：
+\[
+\boxed{\;H(x, u, \lambda, t) := L(x, u, t) + \lambda^\top f(x, u, t)\;}
+\]
+
+\textbf{分部积分}把 $\dot x$ 上的导数挪到 $\lambda$ 上（保留端点项）：
+\[
+\bar J = \phi(x(T)) - \lambda(T)^\top x(T) + \lambda(0)^\top x_0 + \int_0^T \big[H(x, u, \lambda, t) + \dot\lambda^\top x\big]\, dt
+\]
+自由变量：$x(t), u(t), \lambda(t)$ 加上终端 $x(T)$（终端状态不固定）；$x(0) = x_0$ 固定。
+
+\end{blackboard}
+
+\begin{blackboard}[Track A · Step 2：变分 $\to$ Pontryagin 最大值原理（PMP）]
+
+对每组变量求变分、设为零：
+
+\textbf{对 $x(t)$ 的变分}（$0 < t < T$）：
+\[
+\frac{\partial H}{\partial x} + \dot\lambda = 0
+\;\;\Longrightarrow\;\;
+\boxed{\,\dot\lambda = -\frac{\partial H}{\partial x}\,}
+\quad\text{（costate 方程，反向时间）}
+\]
+
+\textbf{对 $u(t)$ 的变分}：
+\[
+\frac{\partial H}{\partial u} = 0
+\;\;\Longrightarrow\;\;
+\boxed{\,u^*(t) = \arg\min_u\, H(x(t), u, \lambda(t), t)\,}
+\]
+（一般 PMP 是"最小值原理"——$u^*$ 让 $H$ 取最小，即便控制有界等不可导情形也成立。）
+
+\textbf{对 $\lambda(t)$ 的变分}：恢复动力学 $\dot x = f(x, u, t)$。
+
+\textbf{对 $x(T)$ 的变分}（终端自由）：
+\[
+\nabla_x\phi\big|_T - \lambda(T) = 0
+\;\;\Longrightarrow\;\;
+\boxed{\,\lambda(T) = \nabla_x \phi(x(T))\,}\quad\text{（横截性条件）}
+\]
+
+\textbf{合起来 —— PMP}：在最优轨迹上存在 $\lambda(t)$ 使
+\[
+\dot x = \frac{\partial H}{\partial \lambda},\quad
+\dot\lambda = -\frac{\partial H}{\partial x},\quad
+u^* = \arg\min_u H,\quad
+\lambda(T) = \nabla_x\phi.
+\]
+这是 \textbf{Hamilton 方程组 $+$ 控制最小化}——E-L 在带控制问题上的精确推广。
+
+\end{blackboard}
+
+\begin{blackboard}[Track B · Step 1：Bellman 最优性原理]
 
 \textbf{关键洞察}（Bellman, 1957）：
 
@@ -1386,7 +1617,7 @@ V(\mathbf{x}, t) = \min_{\mathbf{u}} \left[ L(\mathbf{x}, \mathbf{u}, t) \, dt +
 
 \end{blackboard}
 
-\begin{blackboard}[HJB方程的推导]
+\begin{blackboard}[Track B · Step 2：Taylor 展开 $\to$ HJB PDE]
 
 \textbf{Taylor展开}：
 \[
@@ -1422,6 +1653,69 @@ V = \min_{\mathbf{u}} \left[ L \, dt + V + \frac{\partial V}{\partial t} dt + \n
 
 \end{blackboard}
 
+\begin{blackboard}[桥接：$\lambda(t) = \nabla_x V(x^*(t), t)$]
+
+\textbf{断言}：PMP 的 costate $\lambda(t)$ 恰好等于 HJB 的值函数梯度 $\nabla_x V$ 在最优轨迹上的取值。
+
+\textbf{推导（沿最优轨迹）}：把 $V(x^*(t), t)$ 对时间微分
+\[
+\frac{dV}{dt} = \frac{\partial V}{\partial t} + \nabla_x V \cdot \dot x^*
+\]
+HJB 方程在最优 $u^*$ 处取等（$\min$ 实现）：
+\[
+\frac{\partial V}{\partial t} + L(x^*, u^*, t) + \nabla_x V \cdot f(x^*, u^*, t) = 0
+\]
+两式相减：
+\[
+\frac{dV}{dt} = -L(x^*, u^*, t)
+\]
+即 $V$ 沿最优轨迹\textbf{以瞬时代价 $L$ 在被消耗}——这正是值函数的定义。
+
+\textbf{识别 $\lambda$}：HJB 写成 $L + V_t + \nabla_x V\cdot f = 0$，对比 PMP 的 Hamiltonian
+$H = L + \lambda^\top f$ 和 costate 方程 $\dot\lambda = -\partial H/\partial x$，
+可以证明（沿任意小扰动）
+\[
+\boxed{\;\lambda(t) = \nabla_x V(x^*(t), t)\;}
+\]
+更精确地：
+\begin{itemize}
+    \item PMP 的 costate ODE $\dot\lambda = -\partial H/\partial x$ \textbf{就是 HJB 的特征线方程}
+    \item HJB 沿最优轨迹"投影"成 PMP——一条 PDE 在一条曲线上塌缩成 ODE
+    \item 终端 $\lambda(T) = \nabla_x\phi$ 和 $V(\cdot, T) = \phi$ \textbf{的梯度} 完全一致
+\end{itemize}
+
+\textbf{所以两条路得到的是同一个 $\lambda$}——继承自 E-L 节运动学约束的乘子。
+
+\end{blackboard}
+
+\begin{keypoint}[PMP vs HJB：维度对偶]
+
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{p{0.22\linewidth}|p{0.34\linewidth}|p{0.34\linewidth}}
+\toprule
+ & \textbf{PMP（Track A）} & \textbf{HJB（Track B）} \\
+\midrule
+对象 & 一条最优轨迹 $(x^*, \lambda^*)$ & 整个值场 $V(x, t)$ \\
+\midrule
+类型 & ODE 系统于 $\mathbb{R}^{2n}$ & PDE 于 $\mathbb{R}^{n+1}$ \\
+\midrule
+求解方向 & 两点边值（$x(0)$ 前、$\lambda(T)$ 后） & 反向时间（终值 $V(\cdot,T)=\phi$） \\
+\midrule
+维度灾难 & 无——只算单条轨迹 & 有——$V$ 在全空间存储 \\
+\midrule
+在 RL 里 & model-based / DDP / iLQR / 神经 ODE & value-based / Bellman / TD / Q-learning \\
+\midrule
+$\lambda$ 的化身 & 乘子（继承自 E-L 节） & $\nabla_x V$（值函数梯度） \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.3em}
+\textbf{这俩是 Legendre 变换的一对}——PMP 是 Lagrangian 视角（$x, \dot x$ 配对），
+HJB 是 Hamiltonian 视角（$x, p$ 配对，$p = \nabla_x V$）。
+\textbf{和单摆那节铺的 Lagrange–Hamilton 二象性是同一个东西，搬到了带控制的情形}。
+
+\end{keypoint}
+
 \begin{blackboard}[LQR的HJB解]
 
 \textbf{猜测}：$V(\mathbf{x}, t) = \frac{1}{2}\mathbf{x}^T P(t) \mathbf{x}$
@@ -1445,6 +1739,44 @@ $\mathbf{u}^* = -R^{-1} B^T P \mathbf{x}$（线性反馈！）
 
 \end{blackboard}
 
+\begin{blackboard}[Track A 应用：LQR via PMP（得到同一个 Riccati）]
+
+把 PMP 套到 LQR。Hamiltonian：
+\[
+H = \tfrac{1}{2}(x^\top Q x + u^\top R u) + \lambda^\top(Ax + Bu)
+\]
+
+\textbf{PMP 三条件}：
+\begin{align*}
+\dot\lambda &= -\partial_x H = -Qx - A^\top \lambda \\
+\partial_u H &= R u + B^\top \lambda = 0
+\quad\Longrightarrow\quad u^* = -R^{-1} B^\top \lambda \\
+\dot x &= Ax + Bu = Ax - B R^{-1} B^\top \lambda
+\end{align*}
+横截性：$\lambda(T) = Q_f\, x(T)$。
+
+\textbf{Ansatz}：$\lambda(t) = P(t)\, x(t)$（类比 HJB 那一支的 $V = \tfrac{1}{2}x^\top P x$）。
+
+代入 $\dot\lambda = \dot P\, x + P\,\dot x$，并结合上面的 ODE：
+\[
+\dot P\, x + P\big(Ax - B R^{-1} B^\top P x\big) = -Q x - A^\top P x
+\]
+$x$ 任意，约去得到\textbf{同一个 Riccati 方程}：
+\[
+-\dot P = Q + A^\top P + P A - P B R^{-1} B^\top P
+\]
+边界 $P(T) = Q_f$ ——和 Track B 完全一致。
+
+\textbf{$\lambda = \nabla_x V$ 在 LQR 上的具象}：
+\[
+\underbrace{\lambda = P x}_{\text{PMP 的 ansatz}}
+\;=\;
+\underbrace{\nabla_x V = \nabla_x \big(\tfrac{1}{2} x^\top P x\big) = P x}_{\text{HJB 那条线}}
+\]
+\textbf{同一个 $P$，同一个 $\lambda$}——两条路真的汇合了。
+
+\end{blackboard}
+
 \begin{blackboard}[LQR数值例子]
 
 \textbf{一维}：$\dot{x} = x + u$，$Q = R = Q_f = 1$
@@ -1464,390 +1796,6 @@ $P = 1 + \sqrt{2} \approx 2.414$
 \textbf{不加控制}：$\dot{x} = x$，指数增长，不稳定
 
 \end{blackboard}
-
-%========================================
-\section{HJB $\to$ Bellman，伴随 $\to$ 反向传播}
-%========================================
-
-\begin{blackboard}[离散时间：Bellman方程]
-
-\textbf{离散化HJB}：
-
-时间 $t_k = k \cdot \Delta t$，$k = 0, 1, \ldots, N$
-
-\textbf{值函数}：$V_k(\mathbf{x}) = $ 从 $(\mathbf{x}, t_k)$ 出发的最优代价
-
-\textbf{Bellman方程}：
-\[
-\boxed{V_k(\mathbf{x}) = \min_{\mathbf{u}} \left[ L(\mathbf{x}, \mathbf{u}) \Delta t + V_{k+1}(f(\mathbf{x}, \mathbf{u})) \right]}
-\]
-
-边界：$V_N(\mathbf{x}) = \phi(\mathbf{x})$
-
-\textbf{这正是强化学习中的 Bellman 方程！}
-
-\end{blackboard}
-
-\begin{blackboard}[RL中的Bellman方程]
-
-\textbf{RL术语}：
-
-状态 $s$，动作 $a$，奖励 $r$，转移 $P(s'|s,a)$
-
-\textbf{值函数}：$V(s) = \mathbb{E}\left[ \sum_{t=0}^\infty \gamma^t r_t \mid s_0 = s \right]$
-
-\textbf{Bellman方程}：
-\[
-V(s) = \max_a \left[ r(s, a) + \gamma \sum_{s'} P(s'|s,a) V(s') \right]
-\]
-
-\textbf{对比最优控制}：
-
-\begin{center}
-\begin{tabular}{c|c}
-最优控制 & 强化学习 \\
-\hline
-状态 $\mathbf{x}$ & 状态 $s$ \\
-控制 $\mathbf{u}$ & 动作 $a$ \\
-代价 $L$ & 负奖励 $-r$ \\
-动力学 $f$ & 转移 $P$ \\
-min 代价 & max 奖励
-\end{tabular}
-\end{center}
-
-\end{blackboard}
-
-\begin{blackboard}[核心联系：HJB = 连续Bellman]
-
-\textbf{HJB方程}（连续时间）：
-\[
--\frac{\partial V}{\partial t} = \min_{\mathbf{u}} \left[ L + \nabla V \cdot f \right]
-\]
-
-\textbf{Bellman方程}（离散时间）：
-\[
-V_k = \min_{\mathbf{u}} \left[ L \Delta t + V_{k+1}(f) \right]
-\]
-
-\textbf{关系}：
-
-$\Delta t \to 0$ 时，Bellman $\to$ HJB
-
-HJB 是 Bellman 的\textbf{连续时间极限}！
-
-\textbf{这为 RL 提供了理论基础}
-
-\end{blackboard}
-
-\begin{blackboard}[伴随方法（Adjoint Method）]
-
-\textbf{问题}：计算 $\frac{dJ}{d\theta}$，其中
-
-\[
-J = \phi(\mathbf{x}(T)), \quad \dot{\mathbf{x}} = f(\mathbf{x}, \theta, t)
-\]
-
-$\theta$ 是参数（如神经网络权重）
-
-\textbf{直接方法}：
-
-对每个 $\theta_i$，扰动并重新积分 $\mathbf{x}(t)$
-
-复杂度：$O(p \cdot T)$，$p$ 是参数数量
-
-\textbf{伴随方法}：
-
-引入伴随状态 $\mathbf{a}(t) = \frac{\partial J}{\partial \mathbf{x}(t)}$
-
-复杂度：$O(T)$，与参数数量无关！
-
-\end{blackboard}
-
-\begin{blackboard}[伴随方程]
-
-\textbf{伴随状态}：$\mathbf{a}(t) = \frac{\partial J}{\partial \mathbf{x}(t)}$
-
-\textbf{伴随方程}（反向ODE）：
-\[
-\boxed{\frac{d\mathbf{a}}{dt} = -\mathbf{a}^T \frac{\partial f}{\partial \mathbf{x}}}
-\]
-
-终端条件：$\mathbf{a}(T) = \frac{\partial \phi}{\partial \mathbf{x}(T)}$
-
-\textbf{参数梯度}：
-\[
-\frac{dJ}{d\theta} = \int_0^T \mathbf{a}(t)^T \frac{\partial f}{\partial \theta} \, dt
-\]
-
-\textbf{计算流程}：
-\begin{enumerate}
-    \item 前向：积分 $\dot{\mathbf{x}} = f$ 从 $0$ 到 $T$
-    \item 反向：积分伴随方程从 $T$ 到 $0$
-    \item 累积梯度
-\end{enumerate}
-
-\end{blackboard}
-
-\begin{blackboard}[伴随方法 = 反向传播]
-
-\textbf{神经网络}：$\mathbf{h}_{l+1} = f_l(\mathbf{h}_l, \theta_l)$
-
-\textbf{损失}：$J = \mathcal{L}(\mathbf{h}_L)$
-
-\textbf{反向传播}：
-\[
-\frac{\partial J}{\partial \mathbf{h}_l} = \frac{\partial J}{\partial \mathbf{h}_{l+1}} \cdot \frac{\partial \mathbf{h}_{l+1}}{\partial \mathbf{h}_l}
-\]
-
-\textbf{对比伴随方程}：
-\[
-\frac{d\mathbf{a}}{dt} = -\mathbf{a}^T \frac{\partial f}{\partial \mathbf{x}}
-\]
-
-\textbf{离散化}：
-\[
-\mathbf{a}_l = \mathbf{a}_{l+1}^T \frac{\partial f_l}{\partial \mathbf{h}_l}
-\]
-
-\textbf{完全一样}！反向传播是伴随方法的\textbf{离散形式}
-
-\end{blackboard}
-
-\begin{blackboard}[Neural ODE]
-
-\textbf{Chen et al., 2018}：把神经网络看作ODE
-
-\textbf{传统ResNet}：$\mathbf{h}_{l+1} = \mathbf{h}_l + f_l(\mathbf{h}_l)$
-
-\textbf{连续极限}：$\frac{d\mathbf{h}}{dt} = f(\mathbf{h}, t, \theta)$
-
-\textbf{优势}：
-\begin{itemize}
-    \item 内存 $O(1)$（用伴随方法，不存中间状态）
-    \item 连续深度（可以选任意精度）
-    \item 可逆（用于生成模型）
-\end{itemize}
-
-\textbf{代价}：
-\begin{itemize}
-    \item 训练慢（需要积分ODE）
-    \item 数值稳定性问题
-\end{itemize}
-
-\end{blackboard}
-
-\begin{blackboard}[统一视角]
-
-\begin{center}
-\begin{tikzpicture}[
-    node distance=2.5cm,
-    box/.style={rectangle, draw, rounded corners, minimum width=2.5cm, minimum height=1cm, align=center}
-]
-    \node[box] (var) {变分法\\E-L方程};
-    \node[box, right of=var, xshift=2cm] (oc) {最优控制\\HJB方程};
-    \node[box, below of=var] (maxent) {最大熵\\指数族};
-    \node[box, below of=oc] (rl) {强化学习\\Bellman方程};
-    \node[box, below of=maxent, xshift=2.5cm] (dl) {深度学习\\反向传播};
-    
-    \draw[->] (var) -- (oc) node[midway, above] {加控制};
-    \draw[->] (oc) -- (rl) node[midway, right] {离散化};
-    \draw[->] (var) -- (maxent) node[midway, left] {约束优化};
-    \draw[->] (oc) -- (dl) node[midway, right] {伴随方法};
-    \draw[->] (maxent) -- (dl) node[midway, below left] {变分推断};
-\end{tikzpicture}
-\end{center}
-
-\textbf{一切都是优化！}
-
-\end{blackboard}
-
-%========================================
-\section{实验}
-%========================================
-
-\begin{experiment}[实验10a：Neural ODE基础（12分钟）]
-
-\textbf{目标}：用torchdiffeq实现Neural ODE
-
-\textbf{任务1}：拟合螺旋线数据
-
-\begin{lstlisting}
-import torch
-from torchdiffeq import odeint
-
-# 定义ODE函数
-class ODEFunc(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = torch.nn.Sequential(
-            torch.nn.Linear(2, 50),
-            torch.nn.Tanh(),
-            torch.nn.Linear(50, 2)
-        )
-    
-    def forward(self, t, y):
-        return self.net(y)
-
-# 生成螺旋线数据
-def generate_spiral(n_points=100):
-    t = torch.linspace(0, 4*torch.pi, n_points)
-    x = t * torch.cos(t)
-    y = t * torch.sin(t)
-    return torch.stack([x, y], dim=1)
-
-# 训练
-func = ODEFunc()
-optimizer = torch.optim.Adam(func.parameters(), lr=0.01)
-true_y = generate_spiral()
-y0 = true_y[0:1]
-t = torch.linspace(0, 1, 100)
-
-for epoch in range(1000):
-    pred_y = odeint(func, y0, t)
-    loss = ((pred_y.squeeze() - true_y)**2).mean()
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-\end{lstlisting}
-
-\end{experiment}
-
-\begin{experiment}[实验10a续：分析结果]
-
-\textbf{任务2}：比较不同求解器
-
-\begin{lstlisting}
-# 不同求解器
-methods = ['euler', 'midpoint', 'rk4', 'dopri5']
-
-for method in methods:
-    pred = odeint(func, y0, t, method=method)
-    # 计算误差和时间
-\end{lstlisting}
-
-\textbf{预期结果}：
-
-\begin{center}
-\begin{tabular}{c|c|c}
-求解器 & 相对误差 & 时间 \\
-\hline
-euler & $10^{-2}$ & 1x \\
-midpoint & $10^{-3}$ & 2x \\
-rk4 & $10^{-5}$ & 4x \\
-dopri5 & $10^{-7}$ & 可变
-\end{tabular}
-\end{center}
-
-\textbf{思考}：精度 vs 速度的权衡
-
-\end{experiment}
-
-\begin{experiment}[实验10b：Adjoint方法对比（12分钟）]
-
-\textbf{目标}：比较直接反传 vs Adjoint方法的显存
-
-\textbf{任务}：随深度增加，观察显存变化
-
-\begin{lstlisting}
-from torchdiffeq import odeint, odeint_adjoint
-
-# 不同深度（积分步数）
-depths = [10, 50, 100, 500, 1000]
-
-for depth in depths:
-    t = torch.linspace(0, 1, depth)
-    
-    # 直接方法
-    torch.cuda.reset_peak_memory_stats()
-    pred = odeint(func, y0, t)
-    loss = pred[-1].sum()
-    loss.backward()
-    mem_direct = torch.cuda.max_memory_allocated()
-    
-    # Adjoint方法
-    torch.cuda.reset_peak_memory_stats()
-    pred = odeint_adjoint(func, y0, t)
-    loss = pred[-1].sum()
-    loss.backward()
-    mem_adjoint = torch.cuda.max_memory_allocated()
-    
-    print(f"Depth {depth}: Direct={mem_direct/1e6:.1f}MB, Adjoint={mem_adjoint/1e6:.1f}MB")
-\end{lstlisting}
-
-\end{experiment}
-
-\begin{experiment}[实验10b续：显存分析]
-
-\textbf{预期结果}：
-
-\begin{center}
-\begin{tikzpicture}
-\begin{axis}[
-    xlabel={积分步数},
-    ylabel={显存 (MB)},
-    legend pos=north west,
-    width=10cm,
-    height=6cm
-]
-\addplot[blue, mark=*] coordinates {
-    (10, 5) (50, 25) (100, 50) (500, 250) (1000, 500)
-};
-\addlegendentry{直接方法 $O(L)$}
-
-\addplot[red, mark=square*] coordinates {
-    (10, 5) (50, 5) (100, 5) (500, 5) (1000, 5)
-};
-\addlegendentry{Adjoint $O(1)$}
-\end{axis}
-\end{tikzpicture}
-\end{center}
-
-\textbf{关键观察}：
-
-直接方法：显存 $\propto$ 深度（需要存所有中间状态）
-
-Adjoint：显存恒定（只需当前状态）
-
-\textbf{代价}：Adjoint需要重新计算前向，时间约2倍
-
-\end{experiment}
-
-\begin{experiment}[实验10c：连续Normalizing Flow（6分钟）]
-
-\textbf{目标}：用Neural ODE做密度估计
-
-\textbf{核心公式}：对于ODE $\frac{d\mathbf{z}}{dt} = f(\mathbf{z}, t)$
-
-\[
-\frac{d \log p(\mathbf{z})}{dt} = -\text{tr}\left( \frac{\partial f}{\partial \mathbf{z}} \right)
-\]
-
-\textbf{任务}：拟合二维分布
-
-\begin{lstlisting}
-class CNF(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = torch.nn.Sequential(...)
-    
-    def forward(self, t, states):
-        z, log_p = states[0], states[1]
-        dz_dt = self.net(torch.cat([z, t.expand(z.shape[0], 1)], dim=1))
-        
-        # 计算迹（用Hutchinson估计）
-        e = torch.randn_like(z)
-        e_dz = torch.autograd.grad(dz_dt, z, e, create_graph=True)[0]
-        trace = (e_dz * e).sum(dim=1)
-        
-        return dz_dt, -trace
-
-# 从简单分布（高斯）变换到复杂分布
-z0 = torch.randn(1000, 2)
-log_p0 = -0.5 * (z0**2).sum(dim=1)
-z1, log_p1 = odeint(cnf, (z0, log_p0), torch.tensor([0., 1.]))
-\end{lstlisting}
-
-\end{experiment}
 
 %========================================
 \section{本周总结}
@@ -1875,10 +1823,11 @@ p(x) \propto \exp\left( -\sum_k \lambda_k f_k(x) \right)
 -\frac{\partial V}{\partial t} = \min_{\mathbf{u}} \left[ L + \nabla V \cdot f \right]
 \]
 
-\textbf{5. 伴随方程}：
+\textbf{5. Pontryagin 最大值原理（PMP）}：
 \[
-\frac{d\mathbf{a}}{dt} = -\mathbf{a}^T \frac{\partial f}{\partial \mathbf{x}}
+\dot\lambda = -\partial_x H,\quad u^* = \arg\min_u H,\quad H = L + \lambda^\top f
 \]
+其中 $\lambda(t) = \nabla_x V(x^*(t), t)$ 把 PMP 和 HJB 桥接。
 
 \end{keypoint}
 
@@ -1888,15 +1837,14 @@ p(x) \propto \exp\left( -\sum_k \lambda_k f_k(x) \right)
 \begin{tabular}{c|c}
 概念 & 联系 \\
 \hline
-E-L方程 & 泛函优化的必要条件 \\
+E-L方程 & 泛函优化的必要条件（KKT 的连续极限） \\
 最大熵 & $\to$ 指数族分布 \\
 变分推断 & min KL $\Leftrightarrow$ max ELBO \\
-HJB方程 & $\to$ Bellman方程（RL） \\
-伴随方法 & = 反向传播
+HJB方程 & $=$ PMP 的"值场"对偶；$\lambda = \nabla_x V$
 \end{tabular}
 \end{center}
 
-\textbf{统一视角}：优化 + 动力系统 + 概率
+\textbf{统一视角}：拉格朗日乘子 $\lambda$ 贯穿全章——力学的共轭动量、控制的 costate、HJB 的 value 梯度，是同一个对象的不同语言。
 
 \end{keypoint}
 
@@ -1912,7 +1860,7 @@ HJB方程 & $\to$ Bellman方程（RL） \\
 
 2. KL散度为什么不对称？$D_{\text{KL}}(p\|q)$ 和 $D_{\text{KL}}(q\|p)$ 分别在什么场景下使用？
 
-3. 伴随方法为什么能节省显存？代价是什么？
+3. 解释 $\lambda(t) = \nabla_x V(x^*(t), t)$：为什么 PMP 的 costate 等于 HJB 的值梯度？
 
 \textbf{计算题}：
 
@@ -1920,13 +1868,11 @@ HJB方程 & $\to$ Bellman方程（RL） \\
 
 5. 给定 $\mathbb{E}[x] = 1$，$\mathbb{E}[x^2] = 2$，求最大熵分布
 
-6. 对于LQR：$\dot{x} = 2x + u$，$J = \int_0^\infty (x^2 + u^2) dt$，求最优控制
+6. 对于LQR：$\dot{x} = 2x + u$，$J = \int_0^\infty (x^2 + u^2) dt$，分别用 HJB 和 PMP 推导最优控制，验证两者给出同一个 $u^*$
 
 \textbf{编程题}：
 
-7. 实现一个简单的Neural ODE分类器，与普通ResNet比较
-
-8. 用变分信息瓶颈训练分类器，比较鲁棒性
+7. 用变分信息瓶颈训练分类器，比较与普通分类器在带噪声测试集上的鲁棒性
 
 \end{blackboard}
 

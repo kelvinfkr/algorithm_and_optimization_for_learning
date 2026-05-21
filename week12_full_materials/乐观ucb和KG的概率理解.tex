@@ -1,0 +1,480 @@
+\documentclass[UTF8,12pt]{ctexart}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\geometry{a4paper, margin=2.5cm}
+
+\title{乐观 UCB 与 Knowledge Gradient 的概率描述}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{统一的不确定性建模}
+
+考虑一组候选动作或选项 $a\in\mathcal A$。每个动作的真实价值为
+\[
+Q(a),
+\]
+但该价值未知。给定当前观测数据 $\mathcal D_t$，我们用后验分布描述其不确定性：
+\[
+Q(a)\mid \mathcal D_t \sim \mathcal N(\mu_a,\sigma_a^2),
+\]
+其中
+\[
+\mu_a
+\]
+表示当前对动作 $a$ 的价值均值估计，
+\[
+\sigma_a
+\]
+表示当前不确定性大小。
+
+当前认知下的最优价值为
+\[
+V_t = \max_{a\in\mathcal A}\mu_a.
+\]
+
+\section{UCB：不确定性集合下的乐观最大化}
+
+UCB 的核心思想是：
+
+\[
+\boxed{
+\text{选择在乐观置信上界下可能最优的动作。}
+}
+\]
+
+对每个动作 $a$，定义其上置信界：
+\[
+\mathrm{UCB}_t(a)
+=
+\mu_a+\beta_t\sigma_a,
+\]
+其中 $\beta_t>0$ 控制探索强度。
+
+于是 UCB 策略为
+\[
+a_t^{\mathrm{UCB}}
+=
+\arg\max_{a\in\mathcal A}
+\left(
+\mu_a+\beta_t\sigma_a
+\right).
+\]
+
+从概率角度看，如果后验近似为高斯分布，则
+\[
+\mathbb P
+\left(
+Q(a)\leq \mu_a+\beta_t\sigma_a
+\right)
+\]
+可以被解释为某个较高置信水平。例如，当 $\beta_t=1.96$ 时，
+\[
+\mathbb P
+\left(
+Q(a)\leq \mu_a+1.96\sigma_a
+\right)
+\approx 0.975.
+\]
+
+因此 UCB 可以理解为：在高概率置信范围内，选择那个可能达到最大价值的动作。
+
+也可以写成不确定性集合下的乐观优化形式。定义
+\[
+\mathcal U_t(a)
+=
+\left[
+\mu_a-\beta_t\sigma_a,\,
+\mu_a+\beta_t\sigma_a
+\right].
+\]
+则
+\[
+\sup_{q\in\mathcal U_t(a)}q
+=
+\mu_a+\beta_t\sigma_a.
+\]
+
+所以 UCB 等价于
+\[
+a_t^{\mathrm{UCB}}
+=
+\arg\max_{a\in\mathcal A}
+\sup_{q\in\mathcal U_t(a)}
+q.
+\]
+
+也就是
+\[
+\boxed{
+a_t^{\mathrm{UCB}}
+=
+\arg\max_{a}
+\sup_{q\in\mathcal U_t(a)}
+q
+}
+\]
+
+这说明 UCB 的本质是：
+
+\[
+\boxed{
+\text{在不确定性约束下，对每个动作取最乐观可能值，然后最大化。}
+}
+\]
+
+\section{KG：采样后对最大值认知更新的期望}
+
+Knowledge Gradient，简称 KG，不是直接看哪个动作当前上界最大，而是看：
+
+\[
+\boxed{
+\text{采样哪个动作，最能提升我们对全局最优值的认知。}
+}
+\]
+
+假设我们现在采样动作 $a$，得到随机观测
+\[
+Y_a.
+\]
+
+观测 $Y_a$ 后，后验均值会更新为
+\[
+\mu_{t+1}(b;Y_a),
+\]
+其中 $b\in\mathcal A$ 表示任意候选动作。
+
+更新后的认知最优值为
+\[
+V_{t+1}(Y_a)
+=
+\max_{b\in\mathcal A}
+\mu_{t+1}(b;Y_a).
+\]
+
+当前认知最优值为
+\[
+V_t
+=
+\max_{b\in\mathcal A}
+\mu_t(b).
+\]
+
+因此，采样动作 $a$ 带来的认知提升为
+\[
+\Delta_a(Y_a)
+=
+V_{t+1}(Y_a)-V_t.
+\]
+
+KG 定义为这个认知提升的期望：
+\[
+\mathrm{KG}_t(a)
+=
+\mathbb E_{Y_a}
+\left[
+V_{t+1}(Y_a)-V_t
+\right].
+\]
+
+代入 $V_{t+1}$ 和 $V_t$，可得
+\[
+\mathrm{KG}_t(a)
+=
+\mathbb E_{Y_a}
+\left[
+\max_{b\in\mathcal A}
+\mu_{t+1}(b;Y_a)
+\right]
+-
+\max_{b\in\mathcal A}
+\mu_t(b).
+\]
+
+KG 策略为
+\[
+a_t^{\mathrm{KG}}
+=
+\arg\max_{a\in\mathcal A}
+\mathrm{KG}_t(a).
+\]
+
+即
+\[
+\boxed{
+a_t^{\mathrm{KG}}
+=
+\arg\max_a
+\mathbb E_{Y_a}
+\left[
+\max_b \mu_{t+1}(b;Y_a)
+-
+\max_b \mu_t(b)
+\right].
+}
+\]
+
+\section{阈值型 KG：最大值认知更新超过某个阈值的概率}
+
+如果我们不只关心平均提升，而是关心：
+
+\[
+\text{采样后，对最优值的认知提升是否超过某个阈值 } \tau,
+\]
+
+则可以定义阈值型 KG。
+
+仍然令
+\[
+\Delta_a(Y_a)
+=
+V_{t+1}(Y_a)-V_t.
+\]
+
+那么可以定义概率型指标：
+\[
+\mathrm{PI\text{-}KG}_t(a)
+=
+\mathbb P_{Y_a}
+\left(
+\Delta_a(Y_a)>\tau
+\right).
+\]
+
+也就是
+\[
+\mathrm{PI\text{-}KG}_t(a)
+=
+\mathbb P_{Y_a}
+\left[
+\max_b \mu_{t+1}(b;Y_a)
+-
+\max_b \mu_t(b)
+>
+\tau
+\right].
+\]
+
+对应的选择策略为
+\[
+a_t
+=
+\arg\max_a
+\mathbb P_{Y_a}
+\left[
+\max_b \mu_{t+1}(b;Y_a)
+-
+\max_b \mu_t(b)
+>
+\tau
+\right].
+\]
+
+这个形式可以理解为：
+
+\[
+\boxed{
+\text{选择那个最有可能让我们对最大值的认知提升超过阈值的动作。}
+}
+\]
+
+也可以定义风险敏感版本：
+\[
+\mathrm{Threshold\text{-}KG}_t(a)
+=
+\mathbb E_{Y_a}
+\left[
+\left(
+V_{t+1}(Y_a)-V_t-\tau
+\right)_+
+\right],
+\]
+其中
+\[
+(x)_+ = \max(x,0).
+\]
+
+即
+\[
+\mathrm{Threshold\text{-}KG}_t(a)
+=
+\mathbb E_{Y_a}
+\left[
+\left(
+\max_b \mu_{t+1}(b;Y_a)
+-
+\max_b \mu_t(b)
+-\tau
+\right)_+
+\right].
+\]
+
+\section{UCB 与 KG 的核心区别}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+方法 & 关注的问题 & 数学形式 \\
+\midrule
+UCB 
+& 谁在乐观情况下可能最大 
+& $\arg\max_a \mu_a+\beta_t\sigma_a$ \\
+
+KG 
+& 采样谁最能提升对最优值的认知 
+& $\arg\max_a \mathbb E[V_{t+1}-V_t]$ \\
+
+阈值 KG 
+& 谁最可能带来超过阈值的认知跃迁 
+& $\arg\max_a \mathbb P(V_{t+1}-V_t>\tau)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+因此，二者的区别可以概括为：
+
+\[
+\boxed{
+\text{UCB 选择“可能价值最高”的动作。}
+}
+\]
+
+\[
+\boxed{
+\text{KG 选择“最能帮助我们知道谁价值最高”的动作。}
+}
+\]
+
+\section{一个二选项直觉例子}
+
+假设有两个动作 $A$ 和 $B$：
+\[
+A:\quad \mu_A=10,\quad \sigma_A=1,
+\]
+\[
+B:\quad \mu_B=8,\quad \sigma_B=5.
+\]
+
+当前认知下，
+\[
+V_t=\max(10,8)=10.
+\]
+
+若取 $\beta=2$，则
+\[
+\mathrm{UCB}(A)=10+2\times 1=12,
+\]
+\[
+\mathrm{UCB}(B)=8+2\times 5=18.
+\]
+
+因此 UCB 会选择 $B$，因为虽然 $B$ 当前均值较低，但它的不确定性更大，乐观上界更高。
+
+而 KG 会问：
+
+\[
+\text{如果我采样 }B\text{，是否会改变我对最优动作的判断？}
+\]
+
+如果采样 $B$ 后，其后验均值可能更新到 $11$，那么
+\[
+V_{t+1}=11,
+\]
+认知提升为
+\[
+\Delta_B=11-10=1.
+\]
+
+如果采样 $B$ 后，其后验均值只更新到 $8.5$，那么
+\[
+V_{t+1}=10,
+\]
+认知提升为
+\[
+\Delta_B=0.
+\]
+
+所以 KG 实际上衡量的是
+\[
+\mathrm{KG}(B)
+\approx
+\mathbb E
+\left[
+(\mu_B^+-\mu_A)_+
+\right],
+\]
+其中 $\mu_B^+$ 表示采样 $B$ 后更新得到的后验均值。
+
+阈值型 KG 则看
+\[
+\mathbb P
+\left(
+\mu_B^+-\mu_A>\tau
+\right).
+\]
+
+\section{最终总结}
+
+UCB 的概率描述是：
+\[
+\boxed{
+a_t^{\mathrm{UCB}}
+=
+\arg\max_a
+\sup_{q\in\mathcal U_t(a)}
+q
+}
+\]
+即在不确定性集合中取最乐观值，然后最大化。
+
+KG 的概率描述是：
+\[
+\boxed{
+a_t^{\mathrm{KG}}
+=
+\arg\max_a
+\mathbb E_{Y_a}
+\left[
+\max_b \mu_{t+1}(b;Y_a)
+-
+\max_b \mu_t(b)
+\right]
+}
+\]
+即选择那个采样后最能提升我们对最优值认知的动作。
+
+阈值型 KG 可以写成：
+\[
+\boxed{
+a_t
+=
+\arg\max_a
+\mathbb P_{Y_a}
+\left[
+\max_b \mu_{t+1}(b;Y_a)
+-
+\max_b \mu_t(b)
+>
+\tau
+\right].
+}
+\]
+
+这正对应：
+
+\[
+\boxed{
+\text{选择那个最可能让“对最大值的理解更新”超过某个阈值的选项。}
+}
+\]
+
+\end{document}

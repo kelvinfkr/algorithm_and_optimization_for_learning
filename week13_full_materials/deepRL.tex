@@ -1,0 +1,2214 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{framed}
+\usepackage{pifont}
+
+\geometry{margin=2.5cm}
+\pgfplotsset{compat=1.17}
+
+% 定理环境
+\theoremstyle{definition}
+\newtheorem{definition}{定义}[section]
+\newtheorem{example}{例}[section]
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}{引理}[section]
+\newtheorem{corollary}{推论}[section]
+\newtheorem{remark}{注记}[section]
+\newtheorem{proposition}{命题}[section]
+
+% 自定义盒子
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{intuition}[1][直觉]{
+  colback=blue!5!white,
+  colframe=blue!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{keypoint}[1][关键点]{
+  colback=red!5!white,
+  colframe=red!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{plainwords}[1][大白话]{
+  colback=yellow!8!white,
+  colframe=yellow!60!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{proofidea}[1][证明思路]{
+  colback=green!5!white,
+  colframe=green!50!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{magicbox}[1][神奇结果]{
+  colback=purple!5!white,
+  colframe=purple!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{calculation}[1][动手算一算]{
+  colback=orange!5!white,
+  colframe=orange!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{optimization}[1][优化视角]{
+  colback=cyan!5!white,
+  colframe=cyan!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\title{\textbf{第13周：深度RL与策略优化} \\[0.5em]
+\large 从函数逼近到自然梯度，策略空间中的优化艺术}
+\author{优化算法课程讲义}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+上周我们学习了表格RL的收敛性理论。但当状态空间巨大（如图像输入）时，表格方法失效。本周我们进入\textbf{深度RL}：用神经网络逼近值函数和策略，把RL问题转化为\textbf{参数空间中的优化问题}。我们将看到，策略梯度方法与SGD、自然梯度与预条件优化、TRPO与信任域方法之间的深刻联系——这正是优化理论在RL中的华丽应用。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{从表格到函数逼近：维度诅咒的破解}
+%=============================================================================
+
+\begin{plainwords}[回顾上周的局限]
+上周的Q-learning和值迭代都是\textbf{表格方法}：为每个$(s,a)$存储一个Q值。
+
+问题：当状态空间巨大时，这不可行。
+\end{plainwords}
+
+\begin{example}[维度诅咒——为什么需要函数逼近]
+\textbf{运筹学场景：车辆路径规划(VRP)}
+
+状态 = (当前位置, 已访问客户集合, 剩余容量, 时间)
+
+\begin{itemize}
+    \item 100个客户：$2^{100} \approx 10^{30}$种已访问子集
+    \item 加上位置、容量、时间：状态空间 $> 10^{35}$
+    \item 存不下！就算每个状态只用1 bit，也需要$10^{25}$ TB
+\end{itemize}
+
+\textbf{Atari游戏}：
+\begin{itemize}
+    \item 输入是$84 \times 84 \times 4$的图像（4帧堆叠）
+    \item 每个像素256个值：$256^{84 \times 84 \times 4} \approx 10^{68000}$种状态
+    \item 比宇宙中的原子数（$10^{80}$）还多得多得多
+\end{itemize}
+
+\textbf{解决方案}：不存储每个状态的值，而是学一个\textbf{函数}$V_\theta(s)$来泛化。
+\end{example}
+
+\subsection{值函数逼近}
+
+\begin{definition}[参数化值函数]
+用参数$\theta \in \mathbb{R}^d$表示值函数：
+\[
+V_\theta(s) \approx V^*(s), \quad Q_\theta(s,a) \approx Q^*(s,a)
+\]
+参数量$d$远小于状态数$|S|$，实现\textbf{压缩}和\textbf{泛化}。
+\end{definition}
+
+\begin{optimization}[函数逼近 = 监督学习 + 自举]
+\textbf{目标}：找$\theta$使得$V_\theta(s)$接近真实$V^*(s)$
+
+\textbf{问题}：我们不知道$V^*(s)$！
+
+\textbf{解决}：用\textbf{Bellman目标}代替真实目标：
+\[
+y_t = r_t + \gamma V_\theta(s_{t+1}) \quad \text{（自举：用估计值构造目标）}
+\]
+
+\textbf{损失函数}：
+\[
+L(\theta) = \mathbb{E}\left[(V_\theta(s_t) - y_t)^2\right]
+\]
+
+这就是把RL问题转化为了\textbf{回归问题}！
+\end{optimization}
+
+\begin{example}[线性函数逼近——特征工程的艺术]
+\textbf{运筹学场景：库存管理}
+
+状态$s$ = (库存水平, 在途订单, 需求预测, 星期几, 是否促销)
+
+\textbf{特征函数}$\phi(s) \in \mathbb{R}^{10}$：
+\begin{itemize}
+    \item $\phi_1(s)$ = 库存水平
+    \item $\phi_2(s)$ = 库存水平$^2$（捕捉非线性）
+    \item $\phi_3(s)$ = 在途订单
+    \item $\phi_4(s)$ = 库存 $\times$ 是否促销（交互项）
+    \item ...
+\end{itemize}
+
+\textbf{线性值函数}：
+\[
+V_\theta(s) = \theta^T \phi(s) = \sum_{i=1}^{10} \theta_i \phi_i(s)
+\]
+
+\textbf{优点}：可解释！$\theta_1 > 0$意味着库存高是好事（不会缺货）。
+
+\textbf{缺点}：需要手工设计特征，表达能力有限。
+\end{example}
+
+\subsection{DQN：深度Q网络}
+
+\begin{plainwords}[DQN的革命性]
+2015年，DeepMind用DQN在Atari游戏上达到人类水平。
+
+核心思想：用\textbf{深度神经网络}代替手工特征，让网络自己学特征！
+\end{plainwords}
+
+\begin{definition}[DQN]
+用神经网络$Q_\theta(s,a)$逼近最优Q函数，损失函数：
+\[
+L(\theta) = \mathbb{E}_{(s,a,r,s') \sim \mathcal{D}}\left[\left(Q_\theta(s,a) - \underbrace{(r + \gamma \max_{a'} Q_{\theta^-}(s', a'))}_{\text{TD目标}}\right)^2\right]
+\]
+\end{definition}
+
+\begin{keypoint}[DQN的两个关键技巧]
+\textbf{1. Experience Replay（经验回放）}
+
+\textbf{问题}：连续的样本高度相关，违反SGD的i.i.d.假设。
+
+\textbf{解决}：把经验$(s,a,r,s')$存入缓冲区$\mathcal{D}$，随机采样训练。
+
+\textbf{运筹学类比}：就像\textbf{历史订单数据库}。你不是只看最近一单，而是从历史中随机抽样学习，打破时间相关性。
+
+\textbf{2. Target Network（目标网络）}
+
+\textbf{问题}：TD目标$r + \gamma \max_{a'} Q_\theta(s', a')$依赖于$\theta$，自己追自己，不稳定。
+
+\textbf{解决}：用旧参数$\theta^-$计算目标，每隔$C$步同步：$\theta^- \leftarrow \theta$。
+
+\textbf{优化类比}：就像\textbf{延迟更新}。目标函数变化太快会导致优化震荡，固定一段时间让优化稳定。
+\end{keypoint}
+
+\begin{algorithm}[H]
+\caption{DQN算法}
+\begin{algorithmic}[1]
+\State 初始化$Q_\theta$和目标网络$Q_{\theta^-}$，经验池$\mathcal{D}$
+\For{episode $= 1, 2, \ldots$}
+    \For{step $t = 1, 2, \ldots$}
+        \State 用$\epsilon$-greedy选动作：$a_t = \begin{cases} \text{random} & \text{w.p. } \epsilon \\ \arg\max_a Q_\theta(s_t, a) & \text{otherwise} \end{cases}$
+        \State 执行$a_t$，观察$r_t, s_{t+1}$
+        \State 存入经验池：$\mathcal{D} \leftarrow \mathcal{D} \cup \{(s_t, a_t, r_t, s_{t+1})\}$
+        \State 从$\mathcal{D}$随机采样batch
+        \State 计算TD目标：$y = r + \gamma \max_{a'} Q_{\theta^-}(s', a')$
+        \State 梯度下降：$\theta \leftarrow \theta - \alpha \nabla_\theta (Q_\theta(s,a) - y)^2$
+        \State 每$C$步：$\theta^- \leftarrow \theta$
+    \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{example}[DQN的运筹学应用——动态定价]
+\textbf{场景}：航空公司动态定价，每个航班有100个座位。
+
+\textbf{状态}：(剩余座位, 距离起飞天数, 竞争对手价格, 历史需求)
+
+\textbf{动作}：设定价格$\in \{100, 150, 200, 250, 300, ...\}$（10个离散价格）
+
+\textbf{奖励}：当天售出座位 $\times$ 价格
+
+\textbf{DQN的优势}：
+\begin{itemize}
+    \item 自动学习复杂的定价策略（比如"起飞前3天涨价"）
+    \item 不需要建立需求模型（model-free）
+    \item 可以处理高维状态（历史需求序列）
+\end{itemize}
+
+\textbf{Experience Replay在这里}：从历史销售数据中学习，不是只看今天的销售。
+\end{example}
+
+%=============================================================================
+\section{向量化环境与大规模并行}
+%=============================================================================
+
+\begin{plainwords}[深度RL的瓶颈]
+深度RL需要\textbf{海量样本}（通常$10^6 \sim 10^9$次交互）。
+
+瓶颈不是GPU计算，而是\textbf{环境仿真}——CPU上一步步跑太慢了！
+\end{plainwords}
+
+\subsection{向量化环境}
+
+\begin{definition}[向量化环境]
+同时运行$N$个独立环境副本，一次返回$N$个样本：
+\[
+(s_1, ..., s_N), (a_1, ..., a_N) \to (r_1, ..., r_N), (s'_1, ..., s'_N)
+\]
+\end{definition}
+
+\begin{example}[向量化环境——仓库调度并行仿真]
+\textbf{场景}：优化仓库机器人调度策略
+
+\textbf{传统方式}（串行）：
+\begin{itemize}
+    \item 仿真1个仓库，机器人走一步
+    \item 策略网络前向传播，选动作
+    \item 仿真下一步...
+    \item 1000步/秒
+\end{itemize}
+
+\textbf{向量化}（并行1024个仓库）：
+\begin{itemize}
+    \item 同时仿真1024个仓库
+    \item 策略网络一次处理1024个状态（batch）
+    \item GPU并行，几乎同样时间
+    \item 有效速度：1000 $\times$ 1024 = 1,024,000步/秒
+\end{itemize}
+
+\textbf{加速比}：1000倍！
+\end{example}
+
+\begin{keypoint}[EnvPool：高性能向量化]
+EnvPool是目前最快的向量化环境库：
+
+\begin{center}
+\begin{tabular}{l|c|c|c}
+\toprule
+环境 & Gym (1 env) & EnvPool (1024 envs) & 加速比 \\
+\midrule
+CartPole & 50K steps/s & 3M steps/s & 60$\times$ \\
+Atari Pong & 2K steps/s & 1M steps/s & 500$\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{关键技术}：
+\begin{itemize}
+    \item C++实现环境逻辑，避免Python开销
+    \item 异步执行，隐藏延迟
+    \item 内存预分配，零拷贝
+\end{itemize}
+\end{keypoint}
+
+\subsection{Isaac Gym：GPU原生仿真}
+
+\begin{plainwords}[终极目标：全流程GPU]
+EnvPool仍然是CPU仿真 + GPU训练。
+
+\textbf{Isaac Gym}：环境仿真也在GPU上，实现\textbf{全流程GPU}！
+\end{plainwords}
+
+\begin{keypoint}[Isaac Gym的架构]
+\begin{center}
+\begin{tikzpicture}[scale=0.9]
+\node[draw, rectangle, minimum width=3cm, minimum height=1cm, fill=blue!20] (env) at (0,0) {GPU环境仿真};
+\node[draw, rectangle, minimum width=3cm, minimum height=1cm, fill=green!20] (policy) at (5,0) {GPU策略网络};
+\draw[->, thick] (env.east) -- node[above] {状态张量} (policy.west);
+\draw[->, thick] (policy.south) -- ++(0,-0.5) -- ++(-5,0) -- node[left] {动作张量} (env.south);
+\node[below] at (2.5, -1.5) {\textbf{零CPU-GPU传输！}};
+\end{tikzpicture}
+\end{center}
+
+\textbf{性能}：
+\begin{itemize}
+    \item 4096个Ant机器人并行仿真
+    \item RTX 3090上：200,000+ steps/秒
+    \item 5分钟训练出能跑的机器人（传统方法需要几小时）
+\end{itemize}
+\end{keypoint}
+
+\begin{example}[Isaac Gym应用——机器人步态优化]
+\textbf{问题}：让四足机器人学会走路
+
+\textbf{状态}：关节角度、角速度、身体姿态（$\sim$50维）
+
+\textbf{动作}：12个关节的扭矩（连续控制）
+
+\textbf{奖励}：前进速度 - 能耗 - 摔倒惩罚
+
+\textbf{传统训练}：
+\begin{itemize}
+    \item MuJoCo CPU仿真，1个机器人
+    \item PPO训练，需要2000万步
+    \item 耗时：10小时
+\end{itemize}
+
+\textbf{Isaac Gym训练}：
+\begin{itemize}
+    \item GPU并行仿真，4096个机器人
+    \item 同样的PPO算法
+    \item 耗时：\textbf{3分钟}
+\end{itemize}
+
+\textbf{加速比}：200倍！
+\end{example}
+
+\begin{optimization}[并行化与优化的联系]
+\textbf{大batch SGD}：向量化环境本质上是增大batch size
+
+回忆SGD方差：$\text{Var}[\nabla_{\text{batch}}] = \frac{\text{Var}[\nabla_{\text{single}}]}{B}$
+
+\textbf{更大的batch}：
+\begin{itemize}
+    \item 梯度估计更准确（方差降低$\sqrt{B}$倍）
+    \item 可以用更大的学习率
+    \item 但不能无限大（泛化可能变差）
+\end{itemize}
+
+\textbf{RL中的特殊性}：样本不是固定数据集，而是策略生成的。并行环境提供了\textbf{多样性}，相当于天然的数据增强。
+\end{optimization}
+
+%=============================================================================
+\section{策略梯度：直接优化策略}
+%=============================================================================
+
+\begin{plainwords}[两种RL范式]
+\textbf{Value-based}（DQN等）：先学$Q^*$，再贪婪得到策略$\pi(s) = \arg\max_a Q^*(s,a)$
+
+\textbf{Policy-based}：直接优化策略$\pi_\theta$！
+
+为什么要直接优化策略？
+\begin{itemize}
+    \item 连续动作空间：$\arg\max$难算
+    \item 随机策略：有时候随机更好（博弈、探索）
+    \item 更稳定：策略小变化 → 行为小变化
+\end{itemize}
+\end{plainwords}
+
+\subsection{策略优化问题}
+
+\begin{definition}[策略优化目标]
+参数化策略$\pi_\theta(a|s)$，目标是最大化期望回报：
+\[
+J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta}\left[\sum_{t=0}^\infty \gamma^t r_t\right] = \mathbb{E}_{s_0}[V^{\pi_\theta}(s_0)]
+\]
+其中$\tau = (s_0, a_0, r_0, s_1, a_1, r_1, ...)$是轨迹。
+\end{definition}
+
+\begin{optimization}[策略优化 = 参数空间中的优化]
+这就是一个标准的优化问题！
+
+\textbf{决策变量}：$\theta \in \mathbb{R}^d$（网络参数）
+
+\textbf{目标函数}：$J(\theta)$（期望回报）
+
+\textbf{约束}：无（或参数范围约束）
+
+\textbf{算法}：梯度上升 $\theta \leftarrow \theta + \alpha \nabla_\theta J(\theta)$
+
+\textbf{挑战}：$J(\theta)$没有解析形式，$\nabla_\theta J$怎么算？
+\end{optimization}
+
+\begin{example}[策略优化——物流网络设计]
+\textbf{问题}：设计快递配送网络
+
+\textbf{策略}$\pi_\theta$：给定(包裹信息, 当前网络状态)，输出(路由决策的概率分布)
+
+\textbf{目标}$J(\theta)$：期望配送时间 + 成本
+
+\textbf{难点}：
+\begin{itemize}
+    \item 配送时间依赖于整个网络的运行（长期效应）
+    \item 需要仿真才能评估策略好坏
+    \item $\nabla J$没有解析形式
+\end{itemize}
+
+\textbf{策略梯度的威力}：不需要环境模型，只需要能仿真！
+\end{example}
+
+\subsection{策略梯度定理}
+
+\begin{theorem}[策略梯度定理 - Sutton et al., 1999]
+\[
+\nabla_\theta J(\theta) = \mathbb{E}_{\pi_\theta}\left[\nabla_\theta \log \pi_\theta(a|s) \cdot Q^{\pi_\theta}(s,a)\right]
+\]
+\end{theorem}
+
+\begin{plainwords}[这个公式在说什么]
+$\nabla_\theta \log \pi_\theta(a|s)$：如果我调整$\theta$，动作$a$的概率会怎么变？
+
+$Q^{\pi_\theta}(s,a)$：动作$a$有多好？
+
+\textbf{乘起来}：好的动作，增加其概率；坏的动作，减少其概率。
+
+这就是\textbf{强化}的本质！
+\end{plainwords}
+
+\begin{proof}
+证明分为5个步骤，每步都有明确的代数操作。
+
+\textbf{Step 1}：定义并展开$J(\theta)$
+
+设起始状态分布为$\rho_0(s)$，则：
+\[
+J(\theta) = \sum_{s_0} \rho_0(s_0) V^{\pi_\theta}(s_0)
+\]
+
+其中值函数可以写成：
+\[
+V^\pi(s) = \sum_a \pi_\theta(a|s) Q^\pi(s,a)
+\]
+
+\textbf{Step 2}：对$\theta$求$\nabla V^\pi(s)$
+
+\begin{align*}
+\nabla_\theta V^{\pi}(s) &= \nabla_\theta \left[\sum_a \pi_\theta(a|s) Q^\pi(s,a)\right] \\
+&= \sum_a \left[\nabla_\theta \pi_\theta(a|s) \cdot Q^\pi(s,a) + \pi_\theta(a|s) \cdot \nabla_\theta Q^\pi(s,a)\right]
+\end{align*}
+
+这里用了乘法法则：$\nabla(fg) = (\nabla f)g + f(\nabla g)$
+
+\textbf{Step 3}：展开$\nabla_\theta Q^\pi(s,a)$
+
+由Bellman方程：
+\[
+Q^\pi(s,a) = R(s,a) + \gamma \sum_{s'} P(s'|s,a) V^\pi(s')
+\]
+
+由于$R$和$P$不依赖于$\theta$：
+\[
+\nabla_\theta Q^\pi(s,a) = \gamma \sum_{s'} P(s'|s,a) \nabla_\theta V^\pi(s')
+\]
+
+\textbf{Step 4}：递归展开
+
+将Step 3代入Step 2：
+\begin{align*}
+\nabla_\theta V^{\pi}(s) &= \sum_a \nabla_\theta \pi_\theta(a|s) Q^\pi(s,a) + \sum_a \pi_\theta(a|s) \gamma \sum_{s'} P(s'|s,a) \nabla_\theta V^\pi(s') \\
+&= \sum_a \nabla_\theta \pi_\theta(a|s) Q^\pi(s,a) + \gamma \sum_{s'} P^\pi(s'|s) \nabla_\theta V^\pi(s')
+\end{align*}
+
+其中$P^\pi(s'|s) = \sum_a \pi_\theta(a|s) P(s'|s,a)$是策略下的转移概率。
+
+这是一个\textbf{递归方程}！继续展开：
+\begin{align*}
+\nabla_\theta V^\pi(s) &= \sum_a \nabla_\theta \pi Q + \gamma \sum_{s'} P^\pi(s'|s) \left[\sum_a \nabla_\theta \pi Q + \gamma \sum_{s''} P^\pi(s''|s') \nabla_\theta V^\pi(s'')\right] \\
+&= \sum_a \nabla_\theta \pi Q + \gamma \sum_{s'} P^\pi(s'|s) \sum_a \nabla_\theta \pi Q + \gamma^2 \sum_{s''} P^\pi(s''|s, 2\text{步}) \nabla_\theta V^\pi(s'')
+\end{align*}
+
+\textbf{Step 5}：用状态访问分布整理
+
+定义\textbf{折扣状态访问分布}：
+\[
+d^\pi(s' | s_0) = \sum_{t=0}^\infty \gamma^t P(s_t = s' | s_0, \pi)
+\]
+
+这是从$s_0$出发，在策略$\pi$下，访问状态$s'$的折扣概率。
+
+将无穷展开整理：
+\begin{align*}
+\nabla_\theta V^\pi(s_0) &= \sum_{t=0}^\infty \gamma^t \sum_{s} P(s_t = s | s_0, \pi) \sum_a \nabla_\theta \pi_\theta(a|s) Q^\pi(s,a) \\
+&= \sum_s d^\pi(s|s_0) \sum_a \nabla_\theta \pi_\theta(a|s) Q^\pi(s,a)
+\end{align*}
+
+因此：
+\begin{align*}
+\nabla_\theta J(\theta) &= \sum_{s_0} \rho_0(s_0) \nabla_\theta V^\pi(s_0) \\
+&= \sum_{s_0} \rho_0(s_0) \sum_s d^\pi(s|s_0) \sum_a \nabla_\theta \pi_\theta(a|s) Q^\pi(s,a) \\
+&= \sum_s d^\pi(s) \sum_a \nabla_\theta \pi_\theta(a|s) Q^\pi(s,a)
+\end{align*}
+
+其中$d^\pi(s) = \sum_{s_0} \rho_0(s_0) d^\pi(s|s_0)$是整体状态访问分布。
+
+\textbf{Step 6}：Log-trick
+
+关键恒等式：$\nabla_\theta \pi_\theta(a|s) = \pi_\theta(a|s) \nabla_\theta \log \pi_\theta(a|s)$
+
+代入：
+\begin{align*}
+\nabla_\theta J &= \sum_s d^\pi(s) \sum_a \pi_\theta(a|s) \nabla_\theta \log \pi_\theta(a|s) Q^\pi(s,a) \\
+&= \mathbb{E}_{s \sim d^\pi, a \sim \pi_\theta}\left[\nabla_\theta \log \pi_\theta(a|s) Q^\pi(s,a)\right]
+\end{align*}
+\end{proof}
+
+\begin{calculation}[Log-trick的验证]
+验证$\nabla \pi = \pi \nabla \log \pi$：
+
+设$\pi_\theta(a|s) = f(\theta)$，则$\log \pi = \log f(\theta)$
+
+$\nabla \log \pi = \frac{\nabla f}{f} = \frac{\nabla \pi}{\pi}$
+
+两边乘$\pi$：$\pi \nabla \log \pi = \nabla \pi$ \quad \checkmark
+\end{calculation}
+
+\begin{keypoint}[Log-trick的深意]
+为什么用$\nabla \log \pi$而不是$\nabla \pi / \pi$？
+
+\textbf{数值稳定}：当$\pi$接近0时，$\nabla \pi / \pi$爆炸，但$\nabla \log \pi$有界。
+
+\textbf{几何意义}：$\nabla \log \pi$是\textbf{Fisher score}，在概率空间中有特殊地位（后面讲自然梯度会用到）。
+
+\textbf{采样友好}：$\mathbb{E}_\pi[f \cdot \nabla \log \pi] = \mathbb{E}_\pi[f \cdot \frac{\nabla \pi}{\pi}] = \sum_a f(a) \nabla \pi(a)$
+
+无论$f$是什么，都可以用采样估计！
+\end{keypoint}
+
+\begin{example}[策略梯度的直觉——调整轮盘赌]
+想象你在玩轮盘赌，可以调整每个数字的概率。
+
+\textbf{策略}$\pi_\theta$：数字1-10的概率分布
+
+\textbf{奖励}：押中5得100分，押中其他得0分
+
+\textbf{一次试验}：按$\pi_\theta$采样，假设采到了7，奖励0。
+
+\textbf{策略梯度更新}：
+\[
+\theta \leftarrow \theta + \alpha \cdot \nabla_\theta \log \pi_\theta(7) \cdot 0 = \theta
+\]
+奖励是0，不更新。
+
+\textbf{另一次试验}：采到了5，奖励100。
+
+\textbf{更新}：
+\[
+\theta \leftarrow \theta + \alpha \cdot \nabla_\theta \log \pi_\theta(5) \cdot 100
+\]
+$\nabla_\theta \log \pi_\theta(5)$指向"增加5的概率"的方向，乘以100（大奖励），大幅调整。
+
+\textbf{多次试验后}：5的概率越来越高！
+\end{example}
+
+\subsection{具体策略的梯度计算}
+
+\begin{calculation}[Softmax策略的梯度]
+\textbf{设置}：离散动作$a \in \{1, 2, ..., K\}$，状态特征$\phi(s) \in \mathbb{R}^d$
+
+\textbf{Softmax策略}：
+\[
+\pi_\theta(a|s) = \frac{\exp(\theta_a^T \phi(s))}{\sum_{b=1}^K \exp(\theta_b^T \phi(s))}
+\]
+
+其中$\theta = (\theta_1, ..., \theta_K) \in \mathbb{R}^{K \times d}$。
+
+\textbf{计算$\log \pi$}：
+\[
+\log \pi_\theta(a|s) = \theta_a^T \phi(s) - \log \sum_{b=1}^K \exp(\theta_b^T \phi(s))
+\]
+
+\textbf{对$\theta_a$求梯度}：
+\begin{align*}
+\nabla_{\theta_a} \log \pi_\theta(a|s) &= \phi(s) - \frac{\exp(\theta_a^T \phi(s))}{\sum_b \exp(\theta_b^T \phi(s))} \phi(s) \\
+&= \phi(s) - \pi_\theta(a|s) \phi(s) \\
+&= (1 - \pi_\theta(a|s)) \phi(s)
+\end{align*}
+
+\textbf{对$\theta_b$（$b \neq a$）求梯度}：
+\[
+\nabla_{\theta_b} \log \pi_\theta(a|s) = -\pi_\theta(b|s) \phi(s)
+\]
+
+\textbf{整合成向量形式}：
+\[
+\nabla_\theta \log \pi_\theta(a|s) = (\mathbf{e}_a - \pi_\theta(\cdot|s)) \otimes \phi(s)
+\]
+
+其中$\mathbf{e}_a$是第$a$个标准基向量，$\otimes$是外积。
+
+\textbf{数值例子}：$K=3$动作，$\phi(s) = (1, 2)^T$，$\theta = \begin{pmatrix} 1 & 0 \\ 0 & 1 \\ 0 & 0 \end{pmatrix}$
+
+计算$\pi$：
+\begin{align*}
+\theta_1^T \phi &= 1 \cdot 1 + 0 \cdot 2 = 1 \\
+\theta_2^T \phi &= 0 \cdot 1 + 1 \cdot 2 = 2 \\
+\theta_3^T \phi &= 0 \cdot 1 + 0 \cdot 2 = 0
+\end{align*}
+
+$\pi(1|s) = \frac{e^1}{e^1 + e^2 + e^0} = \frac{2.72}{2.72 + 7.39 + 1} = 0.244$
+
+$\pi(2|s) = \frac{e^2}{e^1 + e^2 + e^0} = \frac{7.39}{11.11} = 0.665$
+
+$\pi(3|s) = \frac{e^0}{e^1 + e^2 + e^0} = \frac{1}{11.11} = 0.090$
+
+若采样到$a=2$，$\nabla_{\theta_2} \log \pi(2|s) = (1 - 0.665) \cdot (1, 2)^T = (0.335, 0.670)^T$
+\end{calculation}
+
+\begin{calculation}[高斯策略的梯度——连续动作]
+\textbf{设置}：连续动作$a \in \mathbb{R}$，均值由网络输出
+
+\textbf{高斯策略}：
+\[
+\pi_\theta(a|s) = \frac{1}{\sqrt{2\pi}\sigma} \exp\left(-\frac{(a - \mu_\theta(s))^2}{2\sigma^2}\right)
+\]
+
+其中$\mu_\theta(s) = \theta^T \phi(s)$是线性均值函数，$\sigma$固定。
+
+\textbf{计算$\log \pi$}：
+\[
+\log \pi_\theta(a|s) = -\frac{1}{2}\log(2\pi\sigma^2) - \frac{(a - \mu_\theta(s))^2}{2\sigma^2}
+\]
+
+\textbf{对$\theta$求梯度}：
+\begin{align*}
+\nabla_\theta \log \pi_\theta(a|s) &= -\frac{2(a - \mu_\theta(s))(-\nabla_\theta \mu_\theta(s))}{2\sigma^2} \\
+&= \frac{(a - \mu_\theta(s))}{\sigma^2} \nabla_\theta \mu_\theta(s) \\
+&= \frac{(a - \mu_\theta(s))}{\sigma^2} \phi(s)
+\end{align*}
+
+\textbf{直觉}：
+\begin{itemize}
+    \item 如果$a > \mu$（动作比均值大）且获得正奖励，梯度方向增大$\mu$
+    \item 如果$a < \mu$（动作比均值小）且获得正奖励，梯度方向减小$\mu$
+    \item $\sigma^2$越大，梯度越小（不确定性大时更新谨慎）
+\end{itemize}
+
+\textbf{数值例子}：$\phi(s) = (1, 1)^T$，$\theta = (2, 1)^T$，$\sigma = 0.5$
+
+$\mu = \theta^T \phi = 2 \cdot 1 + 1 \cdot 1 = 3$
+
+采样$a = 3.5$（比均值大0.5），奖励$r = 10$
+
+$\nabla_\theta \log \pi = \frac{3.5 - 3}{0.25} (1, 1)^T = 2 \cdot (1, 1)^T = (2, 2)^T$
+
+策略梯度：$\nabla_\theta J \approx (2, 2)^T \cdot 10 = (20, 20)^T$
+
+更新后$\mu$增大，使得更大的动作更可能被选中。
+\end{calculation}
+
+\begin{calculation}[多维高斯策略——对角协方差]
+\textbf{设置}：$a \in \mathbb{R}^m$，对角协方差$\Sigma = \text{diag}(\sigma_1^2, ..., \sigma_m^2)$
+
+\textbf{策略}：
+\[
+\pi_\theta(a|s) = \prod_{i=1}^m \frac{1}{\sqrt{2\pi}\sigma_i} \exp\left(-\frac{(a_i - \mu_{\theta,i}(s))^2}{2\sigma_i^2}\right)
+\]
+
+\textbf{Log-likelihood}：
+\[
+\log \pi = -\frac{m}{2}\log(2\pi) - \sum_{i=1}^m \log \sigma_i - \sum_{i=1}^m \frac{(a_i - \mu_{\theta,i})^2}{2\sigma_i^2}
+\]
+
+\textbf{对均值参数的梯度}：
+\[
+\nabla_\theta \log \pi = \sum_{i=1}^m \frac{a_i - \mu_{\theta,i}}{\sigma_i^2} \nabla_\theta \mu_{\theta,i}
+\]
+
+\textbf{如果$\sigma_i$也是可学习参数}（参数化为$\log \sigma_i$避免负数）：
+\[
+\frac{\partial \log \pi}{\partial \log \sigma_i} = \frac{(a_i - \mu_i)^2}{\sigma_i^2} - 1
+\]
+
+\textbf{直觉}：如果$(a_i - \mu_i)^2 > \sigma_i^2$（偏离较大），增大$\sigma_i$；否则减小。
+\end{calculation}
+
+%=============================================================================
+\section{REINFORCE与方差缩减}
+%=============================================================================
+
+\subsection{REINFORCE算法}
+
+\begin{algorithm}[H]
+\caption{REINFORCE}
+\begin{algorithmic}[1]
+\State 初始化策略网络$\pi_\theta$
+\For{episode $= 1, 2, \ldots$}
+    \State 采样轨迹$\tau = (s_0, a_0, r_0, ..., s_T, a_T, r_T)$
+    \State 计算回报$G_t = \sum_{k=t}^T \gamma^{k-t} r_k$
+    \State 梯度估计：$\hat{g} = \sum_{t=0}^T \nabla_\theta \log \pi_\theta(a_t|s_t) \cdot G_t$
+    \State 更新：$\theta \leftarrow \theta + \alpha \hat{g}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{plainwords}[REINFORCE的问题]
+REINFORCE是\textbf{无偏}的：$\mathbb{E}[\hat{g}] = \nabla J(\theta)$
+
+但\textbf{方差}巨大！
+
+\textbf{原因}：$G_t$可能是+1000也可能是-500，波动剧烈。
+
+\textbf{后果}：需要大量样本，收敛慢，训练不稳定。
+\end{plainwords}
+
+\subsection{Baseline：方差缩减的艺术}
+
+\begin{theorem}[Baseline不改变期望]
+对任意只依赖于状态的函数$b(s)$：
+\[
+\mathbb{E}_{\pi_\theta}[\nabla_\theta \log \pi_\theta(a|s) \cdot b(s)] = 0
+\]
+因此可以用$Q(s,a) - b(s)$代替$Q(s,a)$，期望不变，但方差可能大大减少！
+\end{theorem}
+
+\begin{proof}
+\begin{align*}
+\mathbb{E}_{a \sim \pi_\theta}[\nabla_\theta \log \pi_\theta(a|s) \cdot b(s)] &= b(s) \sum_a \pi_\theta(a|s) \frac{\nabla_\theta \pi_\theta(a|s)}{\pi_\theta(a|s)} \\
+&= b(s) \sum_a \nabla_\theta \pi_\theta(a|s) \\
+&= b(s) \nabla_\theta \underbrace{\sum_a \pi_\theta(a|s)}_{=1} = 0
+\end{align*}
+\end{proof}
+
+\begin{theorem}[最优Baseline的精确形式]
+使方差最小的baseline为：
+\[
+b^*(s) = \frac{\mathbb{E}_{a \sim \pi}[Q(s,a) \|\nabla_\theta \log \pi(a|s)\|^2]}{\mathbb{E}_{a \sim \pi}[\|\nabla_\theta \log \pi(a|s)\|^2]}
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：写出方差
+
+设$g(s,a) = \nabla_\theta \log \pi(a|s)$，原始梯度估计$\hat{g} = g(s,a) \cdot Q(s,a)$。
+
+带baseline的估计：$\hat{g}_b = g(s,a) \cdot (Q(s,a) - b(s))$
+
+方差（对于单个状态$s$，考虑标量情况简化）：
+\begin{align*}
+\text{Var}_a[\hat{g}_b] &= \mathbb{E}_a[(g \cdot (Q - b))^2] - (\mathbb{E}_a[g \cdot (Q-b)])^2 \\
+&= \mathbb{E}_a[g^2 (Q-b)^2] - (\mathbb{E}_a[g Q] - b\underbrace{\mathbb{E}_a[g]}_{=0})^2 \\
+&= \mathbb{E}_a[g^2 (Q-b)^2] - (\mathbb{E}_a[g Q])^2
+\end{align*}
+
+\textbf{Step 2}：对$b$求导
+
+只有第一项依赖于$b$：
+\begin{align*}
+\frac{\partial}{\partial b} \mathbb{E}_a[g^2(Q-b)^2] &= \mathbb{E}_a\left[g^2 \cdot 2(Q-b) \cdot (-1)\right] \\
+&= -2\mathbb{E}_a[g^2 Q] + 2b \mathbb{E}_a[g^2]
+\end{align*}
+
+\textbf{Step 3}：令导数为零
+
+$-2\mathbb{E}_a[g^2 Q] + 2b^* \mathbb{E}_a[g^2] = 0$
+
+\[
+b^*(s) = \frac{\mathbb{E}_a[g^2 Q]}{\mathbb{E}_a[g^2]} = \frac{\mathbb{E}_a[\|\nabla \log \pi\|^2 Q]}{\mathbb{E}_a[\|\nabla \log \pi\|^2]}
+\]
+
+\textbf{Step 4}：验证是最小值
+
+$\frac{\partial^2}{\partial b^2} \text{Var} = 2\mathbb{E}_a[g^2] > 0$，确实是最小值。
+\end{proof}
+
+\begin{calculation}[最优Baseline的近似]
+精确的$b^*(s)$需要知道$\|\nabla \log \pi\|^2$的分布，实际中用近似：
+
+\textbf{近似1}：假设$\|\nabla \log \pi\|^2$对所有$a$近似相同
+\[
+b^*(s) \approx \frac{\mathbb{E}_a[Q(s,a)]}{\mathbb{E}_a[1]} = \mathbb{E}_a[Q(s,a)] = V(s)
+\]
+
+\textbf{近似2}：用状态值函数网络$V_\phi(s)$估计$b^*(s) \approx V(s)$
+
+这就是为什么Actor-Critic中的Critic学习$V$而不是$Q$！
+
+\textbf{数值验证}：假设3个动作，$Q = (10, 20, 30)$，$\|\nabla \log \pi\|^2 = (1, 2, 1)$（向量范数）
+
+精确$b^* = \frac{10 \cdot 1 + 20 \cdot 2 + 30 \cdot 1}{1 + 2 + 1} = \frac{80}{4} = 20$
+
+近似$b = V = \frac{10 + 20 + 30}{3} = 20$（假设均匀策略）
+
+这里两者相同！但一般情况下会有差异。
+\end{calculation}
+
+\begin{keypoint}[Advantage函数与方差缩减]
+定义优势函数$A(s,a) = Q(s,a) - V(s)$
+
+\textbf{性质1}：$\mathbb{E}_{a \sim \pi}[A(s,a)] = 0$
+
+证明：$\mathbb{E}_a[A] = \mathbb{E}_a[Q - V] = V - V = 0$
+
+\textbf{性质2}：$A(s,a)$衡量动作$a$相对于平均的好坏
+\begin{itemize}
+    \item $A > 0$：动作比平均好，应该增加概率
+    \item $A < 0$：动作比平均差，应该减少概率
+    \item $A = 0$：动作和平均一样
+\end{itemize}
+
+\textbf{方差分析}：
+
+设$Q$的均值$\mu = V$，方差$\sigma_Q^2$
+
+无baseline：信号$Q \in [\mu - 2\sigma_Q, \mu + 2\sigma_Q]$
+
+有baseline：信号$A = Q - V \in [-2\sigma_Q, 2\sigma_Q]$
+
+如果$\mu \gg \sigma_Q$（比如物流成本总是正的），无baseline的信号绝对值大但信噪比低。
+\end{keypoint}
+
+\begin{example}[方差缩减的效果——物流调度]
+\textbf{场景}：每天调度100辆车
+
+\textbf{奖励}（无baseline）：
+\begin{itemize}
+    \item 好调度：总成本-10000（奖励+10000）
+    \item 差调度：总成本-15000（奖励+5000）
+    \item 信号：+10000 vs +5000，差异5000
+    \item 但数值本身很大，方差大
+\end{itemize}
+
+\textbf{奖励}（有baseline，$b = 12500$）：
+\begin{itemize}
+    \item 好调度：$10000 - 12500 = -2500$
+    \item 差调度：$5000 - 12500 = -7500$
+    \item 信号：-2500 vs -7500，差异还是5000
+    \item 但数值小了，方差小！
+\end{itemize}
+
+\textbf{最优baseline}$V(s)$：让优势$A(s,a)$在0附近波动，方差最小。
+\end{example}
+
+\begin{calculation}[方差缩减的定量分析]
+设$G$是回报，期望$\mu$，方差$\sigma^2$。设$\psi = \nabla \log \pi$。
+
+\textbf{无baseline的梯度方差}：
+\begin{align*}
+\text{Var}[\psi G] &= \mathbb{E}[(\psi G)^2] - (\mathbb{E}[\psi G])^2 \\
+&= \mathbb{E}[\|\psi\|^2 G^2] - \|\mathbb{E}[\psi G]\|^2 \\
+&= \mathbb{E}[\|\psi\|^2] \mathbb{E}[G^2] - \|\mathbb{E}[\psi G]\|^2 \quad \text{(若$\psi$和$G$独立)}\\
+&= \mathbb{E}[\|\psi\|^2] (\sigma^2 + \mu^2) - \|\nabla J\|^2
+\end{align*}
+
+\textbf{有baseline的梯度方差}：
+\begin{align*}
+\text{Var}[\psi (G-b)] &= \mathbb{E}[\|\psi\|^2 (G-b)^2] - \|\mathbb{E}[\psi (G-b)]\|^2 \\
+&= \mathbb{E}[\|\psi\|^2] (\sigma^2 + (\mu - b)^2) - \|\nabla J\|^2
+\end{align*}
+
+\textbf{方差减少量}：
+\[
+\Delta \text{Var} = \mathbb{E}[\|\psi\|^2] [\mu^2 - (\mu - b)^2] = \mathbb{E}[\|\psi\|^2] \cdot b(2\mu - b)
+\]
+
+当$b = \mu = V$时：$\Delta \text{Var} = \mathbb{E}[\|\psi\|^2] \cdot \mu^2$
+
+\textbf{数值例子}：$\mu = 10000$，$\sigma = 1000$，$b = V = 10000$
+
+无baseline：$\text{Var} \propto 10^6 + 10^8 = 1.01 \times 10^8$
+
+有baseline：$\text{Var} \propto 10^6 + 0 = 10^6$
+
+\textbf{方差降低101倍}！
+\end{calculation}
+
+\subsection{GAE：广义优势估计}
+
+\begin{plainwords}[TD估计 vs MC估计]
+\textbf{TD(0)}：$\hat{A}^{(1)} = r_t + \gamma V(s_{t+1}) - V(s_t) = \delta_t$（1步TD误差）
+\begin{itemize}
+    \item 优点：低方差（只用一步）
+    \item 缺点：有偏差（$V$不准时）
+\end{itemize}
+
+\textbf{MC}：$\hat{A}^{(\infty)} = \sum_{l=0}^\infty \gamma^l r_{t+l} - V(s_t) = G_t - V(s_t)$
+\begin{itemize}
+    \item 优点：无偏
+    \item 缺点：高方差（用整条轨迹）
+\end{itemize}
+
+\textbf{GAE}：在两者之间平滑过渡！
+\end{plainwords}
+
+\begin{definition}[$n$步优势估计]
+\[
+\hat{A}^{(n)}_t = \sum_{l=0}^{n-1} \gamma^l r_{t+l} + \gamma^n V(s_{t+n}) - V(s_t) = \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}
+\]
+\end{definition}
+
+\begin{proof}[推导$\hat{A}^{(n)} = \sum_{l=0}^{n-1} \gamma^l \delta_l$]
+\begin{align*}
+\hat{A}^{(n)}_t &= r_t + \gamma r_{t+1} + ... + \gamma^{n-1} r_{t+n-1} + \gamma^n V(s_{t+n}) - V(s_t) \\
+&= [r_t + \gamma V(s_{t+1}) - V(s_t)] \\
+&\quad + \gamma[r_{t+1} + \gamma V(s_{t+2}) - V(s_{t+1})] \\
+&\quad + ... \\
+&\quad + \gamma^{n-1}[r_{t+n-1} + \gamma V(s_{t+n}) - V(s_{t+n-1})] \\
+&= \delta_t + \gamma \delta_{t+1} + ... + \gamma^{n-1} \delta_{t+n-1} \\
+&= \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}
+\end{align*}
+\end{proof}
+
+\begin{definition}[GAE($\lambda$)]
+\[
+\hat{A}^{\text{GAE}(\lambda)}_t = (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} \hat{A}^{(n)}_t
+\]
+是所有$n$步估计的指数加权平均。
+\end{definition}
+
+\begin{theorem}[GAE的简洁形式]
+\[
+\hat{A}^{\text{GAE}(\lambda)}_t = \sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}
+\]
+\end{theorem}
+
+\begin{proof}
+\begin{align*}
+\hat{A}^{\text{GAE}}_t &= (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} \hat{A}^{(n)}_t \\
+&= (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}
+\end{align*}
+
+交换求和顺序。对于固定的$l$，$\delta_{t+l}$出现在$n > l$的所有项中：
+\begin{align*}
+\hat{A}^{\text{GAE}}_t &= (1-\lambda) \sum_{l=0}^\infty \gamma^l \delta_{t+l} \sum_{n=l+1}^\infty \lambda^{n-1} \\
+&= (1-\lambda) \sum_{l=0}^\infty \gamma^l \delta_{t+l} \cdot \frac{\lambda^l}{1-\lambda} \\
+&= \sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}
+\end{align*}
+
+其中用了几何级数：$\sum_{n=l+1}^\infty \lambda^{n-1} = \lambda^l + \lambda^{l+1} + ... = \frac{\lambda^l}{1-\lambda}$
+\end{proof}
+
+\begin{calculation}[GAE的数值计算]
+实际中，轨迹有限长$T$，从后往前计算：
+
+$\hat{A}^{\text{GAE}}_T = 0$（终止状态）
+
+$\hat{A}^{\text{GAE}}_{T-1} = \delta_{T-1}$
+
+$\hat{A}^{\text{GAE}}_{T-2} = \delta_{T-2} + \gamma\lambda \hat{A}^{\text{GAE}}_{T-1}$
+
+...
+
+$\hat{A}^{\text{GAE}}_t = \delta_t + \gamma\lambda \hat{A}^{\text{GAE}}_{t+1}$
+
+这是一个\textbf{一次遍历}的$O(T)$算法！
+
+\textbf{数值例子}：$\gamma = 0.99$，$\lambda = 0.95$，轨迹$(r_0, r_1, r_2) = (1, 2, 3)$
+
+假设$V(s_0) = 10, V(s_1) = 11, V(s_2) = 12, V(s_3) = 0$（终止）
+
+$\delta_0 = 1 + 0.99 \times 11 - 10 = 1.89$
+
+$\delta_1 = 2 + 0.99 \times 12 - 11 = 2.88$
+
+$\delta_2 = 3 + 0.99 \times 0 - 12 = -9$
+
+GAE（从后往前）：
+
+$\hat{A}_2 = -9$
+
+$\hat{A}_1 = 2.88 + 0.99 \times 0.95 \times (-9) = 2.88 - 8.46 = -5.58$
+
+$\hat{A}_0 = 1.89 + 0.99 \times 0.95 \times (-5.58) = 1.89 - 5.25 = -3.36$
+\end{calculation}
+
+\begin{keypoint}[$\lambda$的选择]
+\begin{center}
+\begin{tabular}{c|c|c|l}
+\toprule
+$\lambda$ & 偏差 & 方差 & 等价于 \\
+\midrule
+0 & 高（依赖$V$） & 低 & TD(0)：$\hat{A} = \delta_t$ \\
+1 & 低（无偏） & 高 & MC：$\hat{A} = G_t - V(s_t)$ \\
+0.95 & 中等 & 中等 & \textbf{实践中常用} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{偏差-方差权衡}：
+\begin{itemize}
+    \item $\lambda$小：更信任$V$的估计，偏差大但方差小
+    \item $\lambda$大：更信任实际回报，偏差小但方差大
+\end{itemize}
+\end{keypoint}
+
+%=============================================================================
+\section{Actor-Critic：两个网络的协奏}
+%=============================================================================
+
+\begin{plainwords}[REINFORCE的另一个问题]
+REINFORCE用$G_t$（整个轨迹的回报）作为$Q$的估计。
+
+\textbf{问题}：必须等到episode结束才能更新！
+
+\textbf{解决}：用一个\textbf{神经网络}来估计$Q$或$V$，实时更新。
+
+这就是Actor-Critic：
+\begin{itemize}
+    \item \textbf{Actor}（演员）：策略网络$\pi_\theta$，选动作
+    \item \textbf{Critic}（评委）：值网络$V_\phi$，评价好坏
+\end{itemize}
+\end{plainwords}
+
+\begin{definition}[Actor-Critic]
+\textbf{Critic更新}（TD学习）：
+\[
+\phi \leftarrow \phi - \beta \nabla_\phi (V_\phi(s) - (r + \gamma V_\phi(s')))^2
+\]
+
+\textbf{Actor更新}（策略梯度）：
+\[
+\theta \leftarrow \theta + \alpha \nabla_\theta \log \pi_\theta(a|s) \cdot \underbrace{(r + \gamma V_\phi(s') - V_\phi(s))}_{\text{TD误差} \approx A(s,a)}
+\]
+\end{definition}
+
+\begin{theorem}[TD误差是优势函数的无偏估计]
+设$\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$，其中$V = V^\pi$是真实值函数。则：
+\[
+\mathbb{E}[\delta_t | s_t, a_t] = A^\pi(s_t, a_t)
+\]
+\end{theorem}
+
+\begin{proof}
+\begin{align*}
+\mathbb{E}[\delta_t | s_t, a_t] &= \mathbb{E}[r_t + \gamma V^\pi(s_{t+1}) | s_t, a_t] - V^\pi(s_t) \\
+&= R(s_t, a_t) + \gamma \sum_{s'} P(s'|s_t, a_t) V^\pi(s') - V^\pi(s_t) \\
+&= Q^\pi(s_t, a_t) - V^\pi(s_t) \quad \text{（由$Q$的定义）} \\
+&= A^\pi(s_t, a_t)
+\end{align*}
+\end{proof}
+
+\begin{corollary}[TD误差的期望为零]
+\[
+\mathbb{E}_{a_t \sim \pi}[\delta_t | s_t] = \mathbb{E}_{a_t \sim \pi}[A^\pi(s_t, a_t) | s_t] = 0
+\]
+\end{corollary}
+
+\begin{proof}
+\begin{align*}
+\mathbb{E}_{a \sim \pi}[A^\pi(s, a)] &= \mathbb{E}_{a \sim \pi}[Q^\pi(s, a) - V^\pi(s)] \\
+&= \mathbb{E}_{a \sim \pi}[Q^\pi(s, a)] - V^\pi(s) \\
+&= V^\pi(s) - V^\pi(s) = 0
+\end{align*}
+\end{proof}
+
+\subsection{Compatible Function Approximation}
+
+\begin{plainwords}[问题]
+当用函数逼近$\hat{A}_w(s,a)$代替真实$A^\pi(s,a)$时，策略梯度还对吗？
+
+一般情况下，用近似$\hat{A}$会引入\textbf{偏差}。
+
+但有一个特殊情况：如果$\hat{A}$满足"兼容性条件"，偏差为零！
+\end{plainwords}
+
+\begin{theorem}[Compatible Function Approximation - Sutton et al., 1999]
+若$\hat{A}_w(s,a)$满足：
+\begin{enumerate}
+    \item \textbf{兼容性}：$\nabla_a \hat{A}_w(s,a) = \nabla_\theta \log \pi_\theta(a|s)$
+    \item \textbf{最小二乘}：$w = \arg\min_w \mathbb{E}_{s,a \sim \pi}[(A^\pi(s,a) - \hat{A}_w(s,a))^2]$
+\end{enumerate}
+则用$\hat{A}_w$代替$A^\pi$不影响策略梯度：
+\[
+\nabla_\theta J = \mathbb{E}_{\pi}[\nabla_\theta \log \pi_\theta(a|s) \cdot \hat{A}_w(s,a)]
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：兼容性条件的形式
+
+条件1意味着$\hat{A}_w(s,a) = w^T \nabla_\theta \log \pi_\theta(a|s) + b(s)$
+
+其中$b(s)$是只依赖于$s$的基线。
+
+\textbf{Step 2}：最小二乘条件的一阶条件
+
+$\nabla_w \mathbb{E}[(A - \hat{A}_w)^2] = 0$
+
+$\mathbb{E}[(A^\pi - \hat{A}_w) \nabla_w \hat{A}_w] = 0$
+
+$\mathbb{E}[(A^\pi - \hat{A}_w) \nabla_\theta \log \pi] = 0$（由条件1）
+
+\textbf{Step 3}：策略梯度的差
+
+\begin{align*}
+&\mathbb{E}[\nabla_\theta \log \pi \cdot \hat{A}_w] - \mathbb{E}[\nabla_\theta \log \pi \cdot A^\pi] \\
+&= \mathbb{E}[\nabla_\theta \log \pi \cdot (\hat{A}_w - A^\pi)] \\
+&= -\mathbb{E}[(A^\pi - \hat{A}_w) \nabla_\theta \log \pi] \\
+&= 0 \quad \text{（由Step 2）}
+\end{align*}
+
+因此$\mathbb{E}[\nabla_\theta \log \pi \cdot \hat{A}_w] = \mathbb{E}[\nabla_\theta \log \pi \cdot A^\pi] = \nabla_\theta J$。
+\end{proof}
+
+\begin{example}[Compatible Function Approximation的实例]
+对于高斯策略$\pi_\theta(a|s) = \mathcal{N}(\theta^T \phi(s), \sigma^2)$：
+
+$\nabla_\theta \log \pi = \frac{a - \theta^T \phi(s)}{\sigma^2} \phi(s)$
+
+兼容的优势函数形式：$\hat{A}_w(s,a) = w^T \cdot \frac{a - \theta^T \phi(s)}{\sigma^2} \phi(s)$
+
+这是一个关于$(a - \mu)$的线性函数！
+
+\textbf{直觉}：兼容函数只需要建模"动作偏离均值时优势如何变化"，不需要建模完整的$Q$函数。
+\end{example}
+
+\subsection{策略梯度的方差分析}
+
+\begin{theorem}[策略梯度估计的方差]
+设$\hat{g} = \nabla_\theta \log \pi_\theta(a|s) \cdot \hat{A}(s,a)$是策略梯度的单样本估计，则：
+\[
+\text{Var}[\hat{g}] = \mathbb{E}[\|\nabla \log \pi\|^2 \hat{A}^2] - \|\nabla J\|^2
+\]
+\end{theorem}
+
+\begin{proof}
+设$\psi = \nabla_\theta \log \pi$，则$\hat{g} = \psi \cdot \hat{A}$。
+
+方差定义：$\text{Var}[\hat{g}] = \mathbb{E}[\hat{g} \hat{g}^T] - \mathbb{E}[\hat{g}]\mathbb{E}[\hat{g}]^T$
+
+$\mathbb{E}[\hat{g}] = \nabla J$（无偏性）
+
+$\mathbb{E}[\hat{g} \hat{g}^T] = \mathbb{E}[\psi \psi^T \hat{A}^2]$
+
+对于标量情况（$\theta$是一维）：
+\[
+\text{Var}[\hat{g}] = \mathbb{E}[\psi^2 \hat{A}^2] - (\nabla J)^2
+\]
+
+对于多维情况，迹（总方差）：
+\[
+\text{tr}(\text{Var}[\hat{g}]) = \mathbb{E}[\|\psi\|^2 \hat{A}^2] - \|\nabla J\|^2
+\]
+\end{proof}
+
+\begin{calculation}[方差的数量级估计]
+假设：
+\begin{itemize}
+    \item $\|\nabla \log \pi\| \sim O(1)$（标准化）
+    \item $\hat{A} \sim O(R_{\max}/(1-\gamma))$（优势函数量级）
+    \item $\|\nabla J\| \sim O(R_{\max}/(1-\gamma))$
+\end{itemize}
+
+方差$\sim O(R_{\max}^2/(1-\gamma)^2)$
+
+\textbf{高方差的来源}：
+\begin{enumerate}
+    \item $(1-\gamma)$小（长视野）→ 方差大
+    \item $R_{\max}$大（奖励范围大）→ 方差大
+    \item $\|\nabla \log \pi\|$大（策略尖锐）→ 方差大
+\end{enumerate}
+
+\textbf{方差缩减策略}：
+\begin{enumerate}
+    \item 用baseline减小$\hat{A}$的绝对值
+    \item 奖励归一化
+    \item 多样本平均
+\end{enumerate}
+\end{calculation}
+
+\begin{optimization}[Actor-Critic = 双层优化]
+Actor-Critic可以看作一个\textbf{双层优化}问题：
+
+\textbf{外层}（Actor）：$\max_\theta J(\theta) = \mathbb{E}_{s}[V^{\pi_\theta}(s)]$
+
+\textbf{内层}（Critic）：$\min_\phi \mathbb{E}[(V_\phi(s) - V^{\pi_\theta}(s))^2]$
+
+\textbf{交替优化}：
+\begin{enumerate}
+    \item 固定$\theta$，更新$\phi$使$V_\phi \approx V^{\pi_\theta}$（策略评估）
+    \item 固定$\phi$，更新$\theta$改进策略（策略改进）
+\end{enumerate}
+
+这就是\textbf{广义策略迭代}（GPI）的神经网络版本！
+\end{optimization}
+
+\begin{theorem}[策略迭代的单调性]
+设$\pi_{k+1}(s) = \arg\max_a Q^{\pi_k}(s,a)$（贪婪策略），则$V^{\pi_{k+1}}(s) \geq V^{\pi_k}(s)$对所有$s$成立。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：贪婪改进的性质
+
+由$\pi_{k+1}$的定义：
+\[
+Q^{\pi_k}(s, \pi_{k+1}(s)) = \max_a Q^{\pi_k}(s, a) \geq Q^{\pi_k}(s, \pi_k(s)) = V^{\pi_k}(s)
+\]
+
+\textbf{Step 2}：迭代不等式
+
+\begin{align*}
+V^{\pi_k}(s) &\leq Q^{\pi_k}(s, \pi_{k+1}(s)) \\
+&= R(s, \pi_{k+1}(s)) + \gamma \mathbb{E}_{s'}[V^{\pi_k}(s')] \\
+&\leq R(s, \pi_{k+1}(s)) + \gamma \mathbb{E}_{s'}[Q^{\pi_k}(s', \pi_{k+1}(s'))] \\
+&= R(s, \pi_{k+1}(s)) + \gamma \mathbb{E}_{s'}[R(s', \pi_{k+1}(s')) + \gamma \mathbb{E}_{s''}[V^{\pi_k}(s'')]] \\
+&\leq ...
+\end{align*}
+
+\textbf{Step 3}：展开到无穷
+
+\begin{align*}
+V^{\pi_k}(s) &\leq \mathbb{E}_{\pi_{k+1}}\left[\sum_{t=0}^\infty \gamma^t R(s_t, \pi_{k+1}(s_t)) \mid s_0 = s\right] = V^{\pi_{k+1}}(s)
+\end{align*}
+\end{proof}
+
+\begin{example}[Actor-Critic——实时竞价]
+\textbf{场景}：广告实时竞价（RTB），每秒处理10000次竞价请求
+
+\textbf{为什么需要Actor-Critic}：
+\begin{itemize}
+    \item REINFORCE：要等一整天的广告展示效果才能更新 → 太慢
+    \item DQN：$\arg\max$在连续出价空间上难算
+    \item Actor-Critic：每次竞价后立即更新，支持连续出价
+\end{itemize}
+
+\textbf{Actor}：$\pi_\theta(\text{出价}|\text{用户特征})$，输出出价金额
+
+\textbf{Critic}：$V_\phi(\text{状态})$，估计当前预算状态的长期价值
+
+\textbf{TD误差}：$\delta = \text{广告收益} + \gamma V_\phi(\text{新预算状态}) - V_\phi(\text{旧预算状态})$
+
+\textbf{实时更新}：每次竞价后，用$\delta$更新Actor和Critic。
+\end{example}
+
+\begin{algorithm}[H]
+\caption{Advantage Actor-Critic (A2C)}
+\begin{algorithmic}[1]
+\State 初始化Actor $\pi_\theta$和Critic $V_\phi$
+\For{每步$t$}
+    \State 采样动作$a_t \sim \pi_\theta(\cdot|s_t)$
+    \State 执行$a_t$，观察$r_t, s_{t+1}$
+    \State 计算TD误差：$\delta_t = r_t + \gamma V_\phi(s_{t+1}) - V_\phi(s_t)$
+    \State Critic更新：$\phi \leftarrow \phi + \beta \delta_t \nabla_\phi V_\phi(s_t)$
+    \State Actor更新：$\theta \leftarrow \theta + \alpha \delta_t \nabla_\theta \log \pi_\theta(a_t|s_t)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+%=============================================================================
+\section{Fisher信息与自然梯度}
+%=============================================================================
+
+\begin{plainwords}[普通梯度的问题]
+普通梯度下降：$\theta \leftarrow \theta + \alpha \nabla_\theta J$
+
+\textbf{问题}：参数空间中的小步，可能是策略空间中的\textbf{大步}！
+
+\textbf{例子}：Softmax策略$\pi_\theta(a) = \frac{e^{\theta_a}}{\sum_b e^{\theta_b}}$
+
+如果$\theta_1 = 10, \theta_2 = 0$，则$\pi(a_1) \approx 0.9999$
+
+$\theta_1$从10变到11（参数小变化），$\pi(a_1)$几乎不变。
+
+但$\theta_2$从0变到10（同样的参数变化），$\pi(a_2)$从0.0001变到0.5（策略巨变）！
+
+\textbf{问题}：普通梯度不知道这种差异，可能导致策略剧烈变化，训练不稳定。
+\end{plainwords}
+
+\subsection{Fisher信息矩阵}
+
+\begin{definition}[Fisher信息矩阵]
+\[
+F_\theta = \mathbb{E}_{s \sim d^\pi, a \sim \pi_\theta}\left[\nabla_\theta \log \pi_\theta(a|s) \nabla_\theta \log \pi_\theta(a|s)^T\right]
+\]
+$F_\theta$是$d \times d$的正定矩阵，衡量参数变化对分布的影响。
+\end{definition}
+
+\begin{keypoint}[Fisher信息的几何意义]
+$F_\theta$度量了策略分布$\pi_\theta$对参数$\theta$的\textbf{敏感度}。
+
+\textbf{KL散度的二阶近似}：
+\[
+\text{KL}(\pi_\theta \| \pi_{\theta + \Delta\theta}) \approx \frac{1}{2} \Delta\theta^T F_\theta \Delta\theta
+\]
+
+\textbf{意思}：参数变化$\Delta\theta$导致的策略变化（用KL度量）由$F_\theta$决定。
+
+$F_\theta$的特征值大 → 沿该方向参数小变化导致策略大变化
+
+$F_\theta$的特征值小 → 沿该方向参数大变化也只导致策略小变化
+\end{keypoint}
+
+\begin{proof}[KL散度二阶展开的推导]
+设$p_\theta = \pi_\theta(a|s)$，$q = \pi_{\theta + \Delta\theta}(a|s)$。
+
+\begin{align*}
+\text{KL}(p \| q) &= \sum_a p_\theta(a|s) \log \frac{p_\theta(a|s)}{q(a|s)} \\
+&= \sum_a p_\theta(a|s) [\log p_\theta(a|s) - \log \pi_{\theta+\Delta\theta}(a|s)]
+\end{align*}
+
+对$\log \pi_{\theta+\Delta\theta}$在$\theta$处Taylor展开：
+\[
+\log \pi_{\theta+\Delta\theta} \approx \log \pi_\theta + \Delta\theta^T \nabla \log \pi_\theta + \frac{1}{2} \Delta\theta^T \nabla^2 \log \pi_\theta \Delta\theta
+\]
+
+代入：
+\begin{align*}
+\text{KL} &\approx \sum_a p_\theta \left[-\Delta\theta^T \nabla \log \pi_\theta - \frac{1}{2}\Delta\theta^T \nabla^2 \log \pi_\theta \Delta\theta\right] \\
+&= -\Delta\theta^T \underbrace{\mathbb{E}_a[\nabla \log \pi]}_{=0} - \frac{1}{2}\Delta\theta^T \mathbb{E}_a[\nabla^2 \log \pi] \Delta\theta
+\end{align*}
+
+第一项为零因为$\mathbb{E}_a[\nabla \log \pi] = \sum_a \pi \frac{\nabla \pi}{\pi} = \nabla \sum_a \pi = \nabla 1 = 0$。
+
+关键引理：$\mathbb{E}[\nabla^2 \log \pi] = -\mathbb{E}[\nabla \log \pi (\nabla \log \pi)^T] = -F$
+
+证明：$\nabla^2 \log \pi = \nabla(\nabla \log \pi) = \nabla\left(\frac{\nabla \pi}{\pi}\right) = \frac{\nabla^2 \pi}{\pi} - \frac{\nabla \pi (\nabla \pi)^T}{\pi^2}$
+
+$\mathbb{E}[\nabla^2 \log \pi] = \underbrace{\sum_a \nabla^2 \pi}_{=\nabla^2 1 = 0} - \sum_a \frac{(\nabla \pi)(\nabla \pi)^T}{\pi} = -\mathbb{E}\left[\frac{\nabla \pi}{\pi}\frac{(\nabla \pi)^T}{\pi}\right] = -F$
+
+因此：
+\[
+\text{KL}(p \| q) \approx \frac{1}{2} \Delta\theta^T F_\theta \Delta\theta
+\]
+\end{proof}
+
+\begin{calculation}[高斯策略的Fisher矩阵]
+\textbf{设置}：一维高斯$\pi_\theta(a|s) = \mathcal{N}(\mu, \sigma^2)$，$\mu = \theta$（标量）
+
+\textbf{计算$\nabla_\theta \log \pi$}：
+\[
+\log \pi = -\frac{1}{2}\log(2\pi\sigma^2) - \frac{(a-\theta)^2}{2\sigma^2}
+\]
+\[
+\nabla_\theta \log \pi = \frac{a - \theta}{\sigma^2}
+\]
+
+\textbf{计算Fisher}：
+\begin{align*}
+F_\theta &= \mathbb{E}_{a \sim \mathcal{N}(\theta, \sigma^2)}\left[\left(\frac{a-\theta}{\sigma^2}\right)^2\right] \\
+&= \frac{1}{\sigma^4} \mathbb{E}[(a-\theta)^2] \\
+&= \frac{1}{\sigma^4} \cdot \sigma^2 = \frac{1}{\sigma^2}
+\end{align*}
+
+\textbf{直觉}：
+\begin{itemize}
+    \item $\sigma$小（确定性高）→ $F$大 → 参数小变化导致分布大变化
+    \item $\sigma$大（不确定性高）→ $F$小 → 参数变化对分布影响小
+\end{itemize}
+
+\textbf{数值例子}：
+\begin{itemize}
+    \item $\sigma = 0.1$：$F = 100$，$\theta$变0.1会显著改变分布
+    \item $\sigma = 1$：$F = 1$，$\theta$变0.1影响较小
+    \item $\sigma = 10$：$F = 0.01$，$\theta$变0.1几乎无影响
+\end{itemize}
+\end{calculation}
+
+\begin{calculation}[多维高斯的Fisher矩阵]
+\textbf{设置}：$a \in \mathbb{R}^m$，$\pi(a|s) = \mathcal{N}(\mu_\theta, \Sigma)$，$\Sigma$固定
+
+\textbf{参数}：$\mu_\theta = W\phi(s)$，$W \in \mathbb{R}^{m \times d}$，参数是$\text{vec}(W)$
+
+\textbf{Score}：
+\[
+\nabla_W \log \pi = \Sigma^{-1}(a - \mu) \phi(s)^T
+\]
+
+\textbf{Fisher矩阵}（对$\text{vec}(W)$）：
+\[
+F = \mathbb{E}[\text{vec}(\Sigma^{-1}(a-\mu)\phi^T) \text{vec}(\Sigma^{-1}(a-\mu)\phi^T)^T]
+\]
+
+利用$\text{vec}(ABC) = (C^T \otimes A)\text{vec}(B)$和$\mathbb{E}[(a-\mu)(a-\mu)^T] = \Sigma$：
+\[
+F = (\mathbb{E}[\phi\phi^T]) \otimes \Sigma^{-1}
+\]
+
+这是Kronecker积形式！K-FAC算法就是利用这种结构近似神经网络的Fisher。
+\end{calculation}
+
+\begin{calculation}[Softmax策略的Fisher矩阵]
+\textbf{设置}：$K$个动作，$\pi_\theta(a|s) = \text{softmax}(\theta^T \phi(s))_a$
+
+为简化，设$\phi(s) = 1$（忽略状态），则$\pi_a = \frac{e^{\theta_a}}{\sum_b e^{\theta_b}}$
+
+\textbf{Score}：$\nabla_{\theta_a} \log \pi_a = 1 - \pi_a$，$\nabla_{\theta_b} \log \pi_a = -\pi_b$（$b \neq a$）
+
+写成向量：$\nabla_\theta \log \pi_a = e_a - \pi$，其中$e_a$是第$a$个标准基向量。
+
+\textbf{Fisher矩阵}：
+\begin{align*}
+F &= \mathbb{E}_{a \sim \pi}[(e_a - \pi)(e_a - \pi)^T] \\
+&= \sum_a \pi_a (e_a - \pi)(e_a - \pi)^T \\
+&= \sum_a \pi_a [e_a e_a^T - e_a \pi^T - \pi e_a^T + \pi\pi^T] \\
+&= \text{diag}(\pi) - \pi\pi^T
+\end{align*}
+
+\textbf{验证}：$K = 2$，$\pi = (p, 1-p)$
+\[
+F = \begin{pmatrix} p & 0 \\ 0 & 1-p \end{pmatrix} - \begin{pmatrix} p^2 & p(1-p) \\ p(1-p) & (1-p)^2 \end{pmatrix} = \begin{pmatrix} p(1-p) & -p(1-p) \\ -p(1-p) & p(1-p) \end{pmatrix}
+\]
+
+$\det(F) = 0$！$F$是奇异的，因为$\sum_a \pi_a = 1$约束导致参数冗余。
+
+\textbf{数值例子}：$K=3$，$\pi = (0.5, 0.3, 0.2)$
+\[
+F = \begin{pmatrix} 0.5 & 0 & 0 \\ 0 & 0.3 & 0 \\ 0 & 0 & 0.2 \end{pmatrix} - \begin{pmatrix} 0.25 & 0.15 & 0.1 \\ 0.15 & 0.09 & 0.06 \\ 0.1 & 0.06 & 0.04 \end{pmatrix} = \begin{pmatrix} 0.25 & -0.15 & -0.1 \\ -0.15 & 0.21 & -0.06 \\ -0.1 & -0.06 & 0.16 \end{pmatrix}
+\]
+
+对角元素：各动作概率变化的敏感度。非对角元素：动作之间的耦合（负相关，因为概率和为1）。
+\end{calculation}
+
+\begin{example}[Fisher信息的直觉——地形图]
+想象你在山上，要走到山顶。
+
+\textbf{普通梯度}：只看坡度（$\nabla J$），朝最陡的方向走固定步长。
+
+\textbf{问题}：有些方向地面松软（走一步实际移动很远），有些方向地面坚硬（走一步实际没动多少）。固定步长会导致：松软方向走太远，坚硬方向走太慢。
+
+\textbf{Fisher信息}$F$就是\textbf{地形硬度图}：告诉你每个方向地面有多硬。
+
+\textbf{自然梯度}：根据地形调整步长，松软方向小步，坚硬方向大步。
+\end{example}
+
+\subsection{自然梯度}
+
+\begin{definition}[自然梯度]
+\[
+\tilde{\nabla}_\theta J = F_\theta^{-1} \nabla_\theta J
+\]
+自然梯度 = Fisher逆 × 普通梯度
+\end{definition}
+
+\begin{theorem}[自然梯度是KL约束下的最速上升方向]
+\[
+\tilde{\nabla}_\theta J = \arg\max_{\Delta\theta: \text{KL}(\pi_\theta \| \pi_{\theta+\Delta\theta}) \leq \epsilon} J(\theta + \Delta\theta)
+\]
+（在一阶近似意义下）
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：写出优化问题
+
+目标函数一阶近似：$J(\theta + \Delta\theta) \approx J(\theta) + \nabla_\theta J^T \Delta\theta$
+
+KL约束二阶近似：$\text{KL}(\pi_\theta \| \pi_{\theta+\Delta\theta}) \approx \frac{1}{2}\Delta\theta^T F_\theta \Delta\theta$
+
+优化问题：
+\[
+\max_{\Delta\theta} \nabla_\theta J^T \Delta\theta \quad \text{s.t.} \quad \frac{1}{2}\Delta\theta^T F_\theta \Delta\theta \leq \epsilon
+\]
+
+\textbf{Step 2}：构造Lagrangian
+
+\[
+\mathcal{L}(\Delta\theta, \lambda) = \nabla_\theta J^T \Delta\theta - \lambda\left(\frac{1}{2}\Delta\theta^T F_\theta \Delta\theta - \epsilon\right)
+\]
+
+\textbf{Step 3}：KKT条件
+
+对$\Delta\theta$求导：
+\[
+\nabla_{\Delta\theta} \mathcal{L} = \nabla_\theta J - \lambda F_\theta \Delta\theta = 0
+\]
+
+解得：$\Delta\theta = \frac{1}{\lambda} F_\theta^{-1} \nabla_\theta J$
+
+\textbf{Step 4}：确定$\lambda$
+
+约束取等（最大化时约束必紧）：
+\[
+\frac{1}{2} \cdot \frac{1}{\lambda^2} (F^{-1}\nabla J)^T F (F^{-1}\nabla J) = \epsilon
+\]
+\[
+\frac{1}{2\lambda^2} (\nabla J)^T F^{-1} \nabla J = \epsilon
+\]
+\[
+\lambda = \sqrt{\frac{(\nabla J)^T F^{-1} \nabla J}{2\epsilon}}
+\]
+
+\textbf{Step 5}：最优方向
+
+\[
+\Delta\theta^* = \frac{1}{\lambda} F^{-1} \nabla J = \sqrt{\frac{2\epsilon}{(\nabla J)^T F^{-1} \nabla J}} F^{-1} \nabla J
+\]
+
+方向是$F^{-1} \nabla J$，步长由$\epsilon$决定。
+
+因此自然梯度$\tilde{\nabla} J = F^{-1} \nabla J$是KL约束下的最速上升\textbf{方向}。
+\end{proof}
+
+\begin{theorem}[自然梯度的参数化不变性]
+自然梯度对参数化方式不变：若$\theta' = h(\theta)$是参数变换，则在新参数下的自然梯度等价于原参数下的。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：参数变换下的梯度变换
+
+设$\theta' = h(\theta)$，$J$关于$\theta'$的梯度：
+\[
+\nabla_{\theta'} J = \left(\frac{\partial \theta}{\partial \theta'}\right)^T \nabla_\theta J = (H^{-1})^T \nabla_\theta J
+\]
+其中$H = \frac{\partial \theta'}{\partial \theta}$是Jacobian。
+
+\textbf{Step 2}：参数变换下的Fisher变换
+
+$F_{\theta'} = \mathbb{E}[\nabla_{\theta'} \log \pi (\nabla_{\theta'} \log \pi)^T]$
+
+$\nabla_{\theta'} \log \pi = (H^{-1})^T \nabla_\theta \log \pi$
+
+$F_{\theta'} = (H^{-1})^T F_\theta H^{-1}$
+
+\textbf{Step 3}：自然梯度的变换
+
+$\tilde{\nabla}_{\theta'} J = F_{\theta'}^{-1} \nabla_{\theta'} J = [H F_\theta^{-1} H^T][(H^{-1})^T \nabla_\theta J] = H F_\theta^{-1} \nabla_\theta J = H \tilde{\nabla}_\theta J$
+
+\textbf{Step 4}：验证等价性
+
+在$\theta$参数下走$\tilde{\nabla}_\theta J$步，对应在$\theta'$参数下走$H \tilde{\nabla}_\theta J = \tilde{\nabla}_{\theta'} J$步。
+
+这正是自然梯度在新参数下的定义！
+
+\textbf{对比普通梯度}：$\nabla_{\theta'} J = (H^{-1})^T \nabla_\theta J \neq H \nabla_\theta J$
+
+普通梯度依赖于参数化方式，自然梯度不依赖。
+\end{proof}
+
+\begin{example}[参数化不变性的意义]
+考虑高斯策略$\pi = \mathcal{N}(\mu, \sigma^2)$。
+
+\textbf{参数化1}：$\theta = (\mu, \sigma)$
+
+\textbf{参数化2}：$\theta' = (\mu, \log\sigma)$（更常用，因为$\sigma > 0$）
+
+\textbf{普通梯度}：在两种参数化下不同，学习动态不同。
+
+\textbf{自然梯度}：在两种参数化下\textbf{等价}，学习动态相同。
+
+这意味着自然梯度优化的是\textbf{分布}本身，而不是某个特定的参数化。
+\end{example}
+
+\begin{theorem}[Fisher信息与KL散度的Hessian]
+\[
+F_\theta = \nabla^2_{\theta'} \text{KL}(\pi_\theta \| \pi_{\theta'}) \big|_{\theta'=\theta}
+\]
+Fisher矩阵是KL散度关于第二个参数的Hessian。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：写出KL散度
+
+\[
+\text{KL}(\pi_\theta \| \pi_{\theta'}) = \mathbb{E}_{a \sim \pi_\theta}[\log \pi_\theta(a) - \log \pi_{\theta'}(a)]
+\]
+
+\textbf{Step 2}：对$\theta'$求一阶导
+
+\[
+\nabla_{\theta'} \text{KL} = -\mathbb{E}_{a \sim \pi_\theta}[\nabla_{\theta'} \log \pi_{\theta'}(a)]
+\]
+
+在$\theta' = \theta$处：
+\[
+\nabla_{\theta'} \text{KL}\big|_{\theta'=\theta} = -\mathbb{E}_{a \sim \pi_\theta}[\nabla_\theta \log \pi_\theta(a)] = 0
+\]
+（score的期望为零）
+
+\textbf{Step 3}：对$\theta'$求二阶导
+
+\begin{align*}
+\nabla^2_{\theta'} \text{KL} &= -\mathbb{E}_{a \sim \pi_\theta}[\nabla^2_{\theta'} \log \pi_{\theta'}(a)]
+\end{align*}
+
+在$\theta' = \theta$处：
+\begin{align*}
+\nabla^2_{\theta'} \text{KL}\big|_{\theta'=\theta} &= -\mathbb{E}_{a \sim \pi_\theta}[\nabla^2_\theta \log \pi_\theta(a)]
+\end{align*}
+
+\textbf{Step 4}：利用恒等式
+
+$\nabla^2 \log \pi = \frac{\nabla^2 \pi}{\pi} - \frac{\nabla \pi (\nabla \pi)^T}{\pi^2} = \frac{\nabla^2 \pi}{\pi} - (\nabla \log \pi)(\nabla \log \pi)^T$
+
+取期望：
+\begin{align*}
+\mathbb{E}[\nabla^2 \log \pi] &= \mathbb{E}\left[\frac{\nabla^2 \pi}{\pi}\right] - \mathbb{E}[(\nabla \log \pi)(\nabla \log \pi)^T] \\
+&= \sum_a \nabla^2 \pi(a) - F \\
+&= \nabla^2 \sum_a \pi(a) - F \\
+&= 0 - F = -F
+\end{align*}
+
+因此：
+\[
+\nabla^2_{\theta'} \text{KL}\big|_{\theta'=\theta} = -(-F) = F
+\]
+\end{proof}
+
+\begin{optimization}[自然梯度与预条件优化]
+回忆Week 3学的\textbf{预条件梯度下降}：
+
+$\theta \leftarrow \theta - \alpha P^{-1} \nabla L$
+
+其中$P$是预条件矩阵，好的$P$能加速收敛。
+
+\textbf{自然梯度就是用Fisher矩阵作为预条件}！
+
+\textbf{Newton法}：$P = \nabla^2 L$（Hessian）→ 考虑目标函数的曲率
+
+\textbf{自然梯度}：$P = F$（Fisher）→ 考虑\textbf{参数化}的曲率
+
+\textbf{区别}：Newton关心"目标函数的形状"，自然梯度关心"策略空间的形状"。
+
+\textbf{联系}：对于负对数似然损失，$F = \mathbb{E}[\nabla^2 (-\log p)] = \mathbb{E}[\text{Hessian}]$，Fisher等于期望Hessian！
+\end{optimization}
+
+\begin{calculation}[自然梯度的计算复杂度]
+$F_\theta$是$d \times d$矩阵，$d$是参数量（神经网络通常$10^6 \sim 10^9$）。
+
+\textbf{直接计算}$F^{-1}$：$O(d^3)$ → 不可行！
+
+\textbf{解决方案}：
+\begin{enumerate}
+    \item \textbf{共轭梯度}：不显式求$F^{-1}$，只需要$Fv$的矩阵-向量乘积
+    \item \textbf{Kronecker近似}（K-FAC）：利用网络结构近似$F$
+    \item \textbf{对角近似}：只保留$F$的对角元素
+\end{enumerate}
+\end{calculation}
+
+%=============================================================================
+\section{TRPO的理论基础：策略改进界}
+%=============================================================================
+
+\begin{plainwords}[TRPO的核心问题]
+我们想改进策略$\pi_\theta \to \pi_{\theta'}$，但：
+\begin{enumerate}
+    \item 如何保证新策略确实更好？
+    \item 如何用旧策略的数据评估新策略？
+\end{enumerate}
+
+Kakade \& Langford (2002)给出了漂亮的理论回答。
+\end{plainwords}
+
+\subsection{Performance Difference Lemma}
+
+\begin{theorem}[Performance Difference Lemma]
+对任意两个策略$\pi$和$\pi'$：
+\[
+J(\pi') - J(\pi) = \frac{1}{1-\gamma} \mathbb{E}_{s \sim d^{\pi'}, a \sim \pi'}\left[A^\pi(s, a)\right]
+\]
+其中$d^{\pi'}$是$\pi'$的状态访问分布，$A^\pi(s,a) = Q^\pi(s,a) - V^\pi(s)$是$\pi$的优势函数。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：定义并展开$V^{\pi'}(s)$
+
+\begin{align*}
+V^{\pi'}(s_0) &= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t r_t \mid s_0\right]
+\end{align*}
+
+\textbf{Step 2}：引入$V^\pi$进行配对
+
+关键技巧：加减$V^\pi(s_t)$
+\begin{align*}
+V^{\pi'}(s_0) &= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t r_t\right] \\
+&= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t (r_t + V^\pi(s_t) - V^\pi(s_t))\right] \\
+&= \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t (r_t + \gamma V^\pi(s_{t+1}) - V^\pi(s_t)) + \sum_{t=0}^\infty \gamma^t(V^\pi(s_t) - \gamma V^\pi(s_{t+1}))\right]
+\end{align*}
+
+\textbf{Step 3}：处理第二项（telescoping）
+
+\begin{align*}
+\sum_{t=0}^\infty \gamma^t(V^\pi(s_t) - \gamma V^\pi(s_{t+1})) &= V^\pi(s_0) + \sum_{t=1}^\infty \gamma^t V^\pi(s_t) - \sum_{t=0}^\infty \gamma^{t+1} V^\pi(s_{t+1}) \\
+&= V^\pi(s_0) + \sum_{t=1}^\infty \gamma^t V^\pi(s_t) - \sum_{t=1}^\infty \gamma^t V^\pi(s_t) \\
+&= V^\pi(s_0)
+\end{align*}
+
+\textbf{Step 4}：识别优势函数
+
+第一项中：
+\[
+r_t + \gamma V^\pi(s_{t+1}) - V^\pi(s_t) = Q^\pi(s_t, a_t) - V^\pi(s_t) = A^\pi(s_t, a_t)
+\]
+
+因为$Q^\pi(s,a) = R(s,a) + \gamma \mathbb{E}_{s'}[V^\pi(s')]$，在给定$(s_t, a_t, s_{t+1})$的条件下，$r_t + \gamma V^\pi(s_{t+1})$是$Q^\pi(s_t, a_t)$的无偏估计。
+
+\textbf{Step 5}：整合
+
+\begin{align*}
+V^{\pi'}(s_0) &= V^\pi(s_0) + \mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t A^\pi(s_t, a_t)\right]
+\end{align*}
+
+对初始状态分布取期望：
+\begin{align*}
+J(\pi') &= J(\pi) + \mathbb{E}_{s_0 \sim \rho_0}\mathbb{E}_{\pi'}\left[\sum_{t=0}^\infty \gamma^t A^\pi(s_t, a_t)\right] \\
+&= J(\pi) + \sum_{t=0}^\infty \gamma^t \mathbb{E}_{s_t \sim d^{\pi'}_t, a_t \sim \pi'}\left[A^\pi(s_t, a_t)\right]
+\end{align*}
+
+其中$d^{\pi'}_t(s)$是$t$步时的状态分布。
+
+\textbf{Step 6}：用状态访问分布整理
+
+定义折扣状态访问分布：$d^{\pi'}(s) = (1-\gamma)\sum_{t=0}^\infty \gamma^t d^{\pi'}_t(s)$
+
+则：
+\[
+J(\pi') - J(\pi) = \frac{1}{1-\gamma} \mathbb{E}_{s \sim d^{\pi'}, a \sim \pi'}\left[A^\pi(s, a)\right]
+\]
+\end{proof}
+
+\begin{corollary}[策略改进条件]
+如果对所有状态$s$，$\mathbb{E}_{a \sim \pi'}[A^\pi(s,a)] \geq 0$，则$J(\pi') \geq J(\pi)$。
+\end{corollary}
+
+\begin{proof}
+直接由Performance Difference Lemma：
+\[
+J(\pi') - J(\pi) = \frac{1}{1-\gamma} \mathbb{E}_{s \sim d^{\pi'}}\left[\mathbb{E}_{a \sim \pi'}[A^\pi(s,a)]\right] \geq 0
+\]
+\end{proof}
+
+\subsection{代理目标与近似界}
+
+\begin{plainwords}[问题]
+Performance Difference Lemma需要在$\pi'$的分布下采样，但我们只有$\pi$的数据！
+
+解决：定义一个可以用$\pi$数据计算的\textbf{代理目标}，并证明它和真实目标的差距有界。
+\end{plainwords}
+
+\begin{definition}[代理目标]
+\[
+L_\pi(\pi') = J(\pi) + \frac{1}{1-\gamma}\mathbb{E}_{s \sim d^\pi, a \sim \pi'}\left[A^\pi(s,a)\right]
+\]
+
+注意：状态分布是$d^\pi$（旧策略），但动作分布是$\pi'$（新策略）。
+\end{definition}
+
+\begin{lemma}[代理目标在$\pi$处的性质]
+\begin{enumerate}
+    \item $L_\pi(\pi) = J(\pi)$
+    \item $\nabla_{\pi'} L_\pi(\pi')|_{\pi'=\pi} = \nabla_{\pi'} J(\pi')|_{\pi'=\pi}$
+\end{enumerate}
+即代理目标是真实目标的\textbf{一阶近似}。
+\end{lemma}
+
+\begin{proof}
+\textbf{性质1}：
+\[
+L_\pi(\pi) = J(\pi) + \frac{1}{1-\gamma}\mathbb{E}_{s \sim d^\pi, a \sim \pi}[A^\pi(s,a)] = J(\pi) + \frac{1}{1-\gamma}\mathbb{E}_s[\underbrace{\mathbb{E}_{a \sim \pi}[A^\pi(s,a)]}_{=0}] = J(\pi)
+\]
+
+\textbf{性质2}：
+
+对$J(\pi')$：
+\[
+\nabla_{\pi'} J(\pi') = \frac{1}{1-\gamma}\mathbb{E}_{s \sim d^{\pi'}}\left[\nabla_{\pi'}\mathbb{E}_{a \sim \pi'}[A^\pi(s,a)]\right] + \text{(分布变化项)}
+\]
+
+在$\pi' = \pi$处，分布变化项为零（因为$d^{\pi'} = d^\pi$），所以梯度相等。
+\end{proof}
+
+\begin{theorem}[Kakade-Langford界]
+设$\epsilon = \max_s |\mathbb{E}_{a \sim \pi'}[A^\pi(s,a)]|$，$D_{TV}^{\max} = \max_s D_{TV}(\pi(\cdot|s) \| \pi'(\cdot|s))$，则：
+\[
+J(\pi') \geq L_\pi(\pi') - \frac{4\gamma\epsilon}{(1-\gamma)^2} (D_{TV}^{\max})^2
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：分解真实目标与代理目标的差
+
+\begin{align*}
+J(\pi') - L_\pi(\pi') &= \frac{1}{1-\gamma}\left[\mathbb{E}_{s \sim d^{\pi'}, a \sim \pi'}[A^\pi] - \mathbb{E}_{s \sim d^\pi, a \sim \pi'}[A^\pi]\right] \\
+&= \frac{1}{1-\gamma}\mathbb{E}_{a \sim \pi'}\left[\sum_s (d^{\pi'}(s) - d^\pi(s)) A^\pi(s,a)\right]
+\end{align*}
+
+\textbf{Step 2}：界定状态分布的差异
+
+关键引理：$\|d^{\pi'} - d^\pi\|_1 \leq \frac{2\gamma}{1-\gamma} D_{TV}^{\max}$
+
+证明思路：状态分布的差异来自于每一步转移概率的差异累积。
+
+设$d_t^\pi$和$d_t^{\pi'}$是$t$步时的状态分布。
+
+$d_0^{\pi'} = d_0^\pi = \rho_0$（初始分布相同）
+
+$\|d_{t+1}^{\pi'} - d_{t+1}^\pi\|_1 \leq \|d_t^{\pi'} - d_t^\pi\|_1 + 2D_{TV}^{\max}$
+
+（每一步最多增加$2D_{TV}^{\max}$的差异）
+
+递推：$\|d_t^{\pi'} - d_t^\pi\|_1 \leq 2t \cdot D_{TV}^{\max}$
+
+对折扣状态分布：
+\begin{align*}
+\|d^{\pi'} - d^\pi\|_1 &= (1-\gamma)\left\|\sum_{t=0}^\infty \gamma^t (d_t^{\pi'} - d_t^\pi)\right\|_1 \\
+&\leq (1-\gamma) \sum_{t=0}^\infty \gamma^t \cdot 2t \cdot D_{TV}^{\max} \\
+&= 2(1-\gamma) D_{TV}^{\max} \sum_{t=0}^\infty t\gamma^t \\
+&= 2(1-\gamma) D_{TV}^{\max} \cdot \frac{\gamma}{(1-\gamma)^2} \\
+&= \frac{2\gamma}{1-\gamma} D_{TV}^{\max}
+\end{align*}
+
+\textbf{Step 3}：代入得到界
+
+\begin{align*}
+|J(\pi') - L_\pi(\pi')| &\leq \frac{1}{1-\gamma} \cdot \|d^{\pi'} - d^\pi\|_1 \cdot \epsilon \\
+&\leq \frac{1}{1-\gamma} \cdot \frac{2\gamma}{1-\gamma} D_{TV}^{\max} \cdot \epsilon \\
+&= \frac{2\gamma\epsilon}{(1-\gamma)^2} D_{TV}^{\max}
+\end{align*}
+
+\textbf{Step 4}：用KL散度替换TV距离
+
+由Pinsker不等式：$D_{TV}(p \| q) \leq \sqrt{\frac{1}{2}\text{KL}(p \| q)}$
+
+所以$D_{TV}^{\max} \leq \sqrt{\frac{1}{2}D_{KL}^{\max}}$
+
+代入并整理得最终界。
+
+（注：精确常数取决于具体推导，这里给出的是核心思想。）
+\end{proof}
+
+\begin{keypoint}[界的意义]
+\[
+J(\pi') \geq L_\pi(\pi') - C \cdot D_{KL}^{\max}(\pi \| \pi')
+\]
+
+\textbf{右边是下界}：只要新策略和旧策略足够接近（$D_{KL}$小），代理目标$L_\pi(\pi')$就是真实目标$J(\pi')$的好近似。
+
+\textbf{TRPO的策略}：最大化$L_\pi(\pi')$，同时约束$D_{KL} \leq \delta$，保证下界有效。
+\end{keypoint}
+
+\begin{calculation}[界的数值感受]
+$\gamma = 0.99$，$\epsilon = 1$（优势函数范围），$D_{KL}^{\max} = 0.01$
+
+$D_{TV}^{\max} \leq \sqrt{0.005} \approx 0.07$
+
+惩罚项：$\frac{4 \times 0.99 \times 1}{0.01^2} \times 0.07^2 \approx \frac{4}{0.0001} \times 0.005 = 200$
+
+如果$L_\pi(\pi') - L_\pi(\pi) = 1$（代理目标改进1），真实改进至少$1 - 200 \times 0.01 = -1$...
+
+这说明KL约束需要足够紧！实际中用$\delta \approx 0.001 \sim 0.01$。
+\end{calculation}
+
+%=============================================================================
+\section{TRPO：信任域策略优化}
+%=============================================================================
+
+\begin{plainwords}[自然梯度的问题]
+自然梯度保证了"在KL球内的最优方向"。
+
+但\textbf{步长}$\alpha$还是要手调！太大会崩，太小收敛慢。
+
+\textbf{TRPO的思想}：直接限制策略变化（KL散度），而不是参数变化。
+\end{plainwords}
+
+\subsection{TRPO的推导}
+
+\begin{definition}[TRPO优化问题]
+\[
+\max_{\theta'} L_\theta(\theta') \quad \text{s.t.} \quad \mathbb{E}_s[\text{KL}(\pi_\theta(\cdot|s) \| \pi_{\theta'}(\cdot|s))] \leq \delta
+\]
+
+这是一个\textbf{信任域}（Trust Region）问题！
+\end{definition}
+
+\begin{optimization}[TRPO与信任域方法]
+回忆Week 4学的\textbf{信任域方法}：
+
+$\min_{\Delta x} m(\Delta x)$ s.t. $\|\Delta x\| \leq \delta$
+
+其中$m$是目标函数的局部模型。
+
+\textbf{TRPO完全对应}：
+\begin{itemize}
+    \item $m(\Delta\theta) = -L_\theta(\theta + \Delta\theta)$（负代理目标）
+    \item $\|\cdot\|$换成KL散度
+    \item $\delta$是信任域半径
+\end{itemize}
+
+\textbf{区别}：
+\begin{itemize}
+    \item 传统信任域用欧氏距离：$\|\Delta x\|_2 \leq \delta$
+    \item TRPO用KL散度：$\text{KL}(\pi_\theta \| \pi_{\theta'}) \leq \delta$
+\end{itemize}
+
+\textbf{为什么用KL？}因为KL度量的是\textbf{策略的真实变化}，而欧氏距离只是参数的变化。
+\end{optimization}
+
+\subsection{TRPO的求解}
+
+\begin{keypoint}[二阶近似]
+将$L_\theta(\theta')$一阶展开，KL约束二阶展开：
+
+\textbf{目标}：$L_\theta(\theta') \approx L_\theta(\theta) + \nabla_\theta L_\theta(\theta)^T (\theta' - \theta) = g^T \Delta\theta$
+
+\textbf{约束}：$\text{KL} \approx \frac{1}{2} \Delta\theta^T F_\theta \Delta\theta$
+
+\textbf{优化问题}：
+\[
+\max_{\Delta\theta} g^T \Delta\theta \quad \text{s.t.} \quad \frac{1}{2}\Delta\theta^T F \Delta\theta \leq \delta
+\]
+
+这正是自然梯度的推导！
+\end{keypoint}
+
+\begin{theorem}[TRPO更新方向]
+\[
+\Delta\theta^* = \sqrt{\frac{2\delta}{g^T F^{-1} g}} \cdot F^{-1} g
+\]
+其中$g = \nabla_\theta L_\theta(\theta)$。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：写出Lagrangian
+
+原问题：$\max_{\Delta\theta} g^T \Delta\theta$ s.t. $\frac{1}{2}\Delta\theta^T F \Delta\theta \leq \delta$
+
+Lagrangian：$\mathcal{L}(\Delta\theta, \lambda) = g^T \Delta\theta - \lambda\left(\frac{1}{2}\Delta\theta^T F \Delta\theta - \delta\right)$
+
+\textbf{Step 2}：对$\Delta\theta$求导
+
+$\nabla_{\Delta\theta} \mathcal{L} = g - \lambda F \Delta\theta = 0$
+
+解得：$\Delta\theta = \frac{1}{\lambda} F^{-1} g$
+
+\textbf{Step 3}：代入约束确定$\lambda$
+
+约束取等号（最大化时约束必紧）：
+\begin{align*}
+\frac{1}{2} \Delta\theta^T F \Delta\theta &= \delta \\
+\frac{1}{2} \cdot \frac{1}{\lambda^2} (F^{-1}g)^T F (F^{-1}g) &= \delta \\
+\frac{1}{2\lambda^2} g^T F^{-1} F F^{-1} g &= \delta \\
+\frac{1}{2\lambda^2} g^T F^{-1} g &= \delta
+\end{align*}
+
+解得：$\lambda = \sqrt{\frac{g^T F^{-1} g}{2\delta}}$
+
+\textbf{Step 4}：代回得到最优解
+
+\[
+\Delta\theta^* = \frac{1}{\lambda} F^{-1} g = \sqrt{\frac{2\delta}{g^T F^{-1} g}} F^{-1} g
+\]
+
+\textbf{验证}：$\|\Delta\theta^*\|_F^2 = \frac{2\delta}{g^T F^{-1} g} \cdot g^T F^{-1} F F^{-1} g = \frac{2\delta}{g^T F^{-1}g} \cdot g^T F^{-1} g = 2\delta$ \checkmark
+\end{proof}
+
+\begin{calculation}[TRPO步长的数值例子]
+\textbf{设置}：$d = 2$维参数，$\delta = 0.01$
+
+$g = \nabla_\theta L = (1, 2)^T$
+
+$F = \begin{pmatrix} 4 & 1 \\ 1 & 2 \end{pmatrix}$，$F^{-1} = \frac{1}{7}\begin{pmatrix} 2 & -1 \\ -1 & 4 \end{pmatrix}$
+
+\textbf{计算$F^{-1}g$}：
+\[
+F^{-1}g = \frac{1}{7}\begin{pmatrix} 2 & -1 \\ -1 & 4 \end{pmatrix}\begin{pmatrix} 1 \\ 2 \end{pmatrix} = \frac{1}{7}\begin{pmatrix} 0 \\ 7 \end{pmatrix} = \begin{pmatrix} 0 \\ 1 \end{pmatrix}
+\]
+
+\textbf{计算$g^T F^{-1} g$}：
+\[
+g^T F^{-1} g = (1, 2) \begin{pmatrix} 0 \\ 1 \end{pmatrix} = 2
+\]
+
+\textbf{计算步长系数}：
+\[
+\alpha = \sqrt{\frac{2\delta}{g^T F^{-1} g}} = \sqrt{\frac{0.02}{2}} = 0.1
+\]
+
+\textbf{最终更新}：
+\[
+\Delta\theta^* = 0.1 \cdot \begin{pmatrix} 0 \\ 1 \end{pmatrix} = \begin{pmatrix} 0 \\ 0.1 \end{pmatrix}
+\]
+
+\textbf{对比普通梯度}：$\alpha_{\text{vanilla}} \cdot g = \alpha (1, 2)^T$
+
+即使普通梯度在$\theta_1$方向有分量，TRPO认为这个方向Fisher信息大（策略敏感），所以不走。
+\end{calculation}
+
+\subsection{共轭梯度法求解$F^{-1}g$}
+
+\begin{plainwords}[为什么不直接求$F^{-1}$]
+神经网络参数$d \sim 10^6$，$F$是$10^6 \times 10^6$矩阵。
+
+存储：$10^{12}$个浮点数 → 4TB内存
+
+求逆：$O(d^3) = O(10^{18})$操作 → 不可能
+
+\textbf{解决}：我们只需要$F^{-1}g$，不需要$F^{-1}$本身！
+
+用\textbf{共轭梯度法}（CG）：只需要计算$Fv$（矩阵-向量乘积），不需要存储$F$。
+\end{plainwords}
+
+\begin{keypoint}[Fisher-向量乘积的计算]
+$Fv = \mathbb{E}[\nabla \log \pi (\nabla \log \pi)^T v] = \mathbb{E}[\nabla \log \pi \cdot (\nabla \log \pi)^T v]$
+
+设$\psi = \nabla_\theta \log \pi$，则$Fv = \mathbb{E}[\psi \cdot \psi^T v] = \mathbb{E}[\psi \cdot (\psi \cdot v)]$
+
+\textbf{计算步骤}：
+\begin{enumerate}
+    \item 对每个样本$(s_i, a_i)$，计算$\psi_i = \nabla_\theta \log \pi_\theta(a_i|s_i)$
+    \item 计算标量$c_i = \psi_i^T v$
+    \item 计算$\psi_i \cdot c_i$
+    \item 取平均：$Fv \approx \frac{1}{N}\sum_i c_i \psi_i$
+\end{enumerate}
+
+\textbf{复杂度}：$O(Nd)$，其中$N$是样本数，$d$是参数量。
+\end{keypoint}
+
+\begin{algorithm}[H]
+\caption{共轭梯度法求$F^{-1}g$}
+\begin{algorithmic}[1]
+\State \textbf{输入}：梯度$g$，Fisher-向量乘积函数$Fv$，迭代次数$K$
+\State $x_0 = 0$，$r_0 = g - Fx_0 = g$，$p_0 = r_0$
+\For{$k = 0, 1, ..., K-1$}
+    \State $\alpha_k = \frac{r_k^T r_k}{p_k^T F p_k}$ \Comment{步长}
+    \State $x_{k+1} = x_k + \alpha_k p_k$ \Comment{更新解}
+    \State $r_{k+1} = r_k - \alpha_k F p_k$ \Comment{更新残差}
+    \State $\beta_k = \frac{r_{k+1}^T r_{k+1}}{r_k^T r_k}$ \Comment{共轭系数}
+    \State $p_{k+1} = r_{k+1} + \beta_k p_k$ \Comment{更新搜索方向}
+\EndFor
+\State \textbf{返回}：$x_K \approx F^{-1}g$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{calculation}[CG的收敛性]
+CG在$d$步内精确收敛（理论上），但实际中：
+\begin{itemize}
+    \item 10-20步就足够好
+    \item 每步$O(Nd)$（一次$Fv$乘积）
+    \item 总复杂度$O(KNd)$，$K \ll d$
+\end{itemize}
+
+\textbf{数值例子}：$d = 10^6$参数，$N = 10^4$样本，$K = 10$步
+
+直接求逆：$O(10^{18})$ → 不可能
+
+CG：$O(10 \times 10^4 \times 10^6) = O(10^{11})$ → 可行
+
+\textbf{加速比}：$10^7$倍！
+\end{calculation}
+
+\subsection{TRPO的完整算法}
+
+\begin{algorithm}[H]
+\caption{TRPO完整算法}
+\begin{algorithmic}[1]
+\State \textbf{超参数}：信任域半径$\delta$，CG迭代数$K$，回溯系数$\alpha_{\text{backtrack}}$
+\For{iteration $= 1, 2, ...$}
+    \State \textbf{// 1. 收集数据}
+    \State 用$\pi_{\theta_{\text{old}}}$收集$N$条轨迹
+    \State 计算每步的$\hat{A}_t$（用GAE）
+    
+    \State \textbf{// 2. 计算梯度}
+    \State $g = \nabla_\theta L(\theta)|_{\theta=\theta_{\text{old}}}$，其中$L(\theta) = \mathbb{E}\left[\frac{\pi_\theta}{\pi_{\theta_{\text{old}}}} \hat{A}\right]$
+    
+    \State \textbf{// 3. 共轭梯度求$F^{-1}g$}
+    \State $s = \text{CG}(F, g, K)$ \Comment{$s \approx F^{-1}g$}
+    
+    \State \textbf{// 4. 计算步长}
+    \State $\alpha = \sqrt{\frac{2\delta}{s^T F s}}$ \Comment{使得$\frac{1}{2}\Delta\theta^T F \Delta\theta = \delta$}
+    
+    \State \textbf{// 5. 线搜索（确保改进）}
+    \For{$j = 0, 1, 2, ...$}
+        \State $\theta_{\text{new}} = \theta_{\text{old}} + \alpha_{\text{backtrack}}^j \cdot \alpha \cdot s$
+        \State 计算$\bar{\text{KL}} = \mathbb{E}_s[\text{KL}(\pi_{\theta_{\text{old}}}(\cdot|s) \| \pi_{\theta_{\text{new}}}(\cdot|s))]$
+        \If{$\bar{\text{KL}} \leq \delta$ \textbf{and} $L(\theta_{\text{new}}) \geq L(\theta_{\text{old}})$}
+            \State \textbf{break}
+        \EndIf
+    \EndFor
+    \State $\theta_{\text{old}} \leftarrow \theta_{\text{new}}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{example}[TRPO vs 普通策略梯度——稳定性对比]
+\textbf{场景}：训练机器人行走
+
+\textbf{普通策略梯度}：
+\begin{itemize}
+    \item 学习率太大：策略突变，机器人从"能走"变成"乱摔"
+    \item 学习率太小：收敛太慢
+    \item 需要仔细调学习率
+\end{itemize}
+
+\textbf{TRPO}：
+\begin{itemize}
+    \item 直接限制策略变化：KL $\leq 0.01$
+    \item 每次更新后，新策略和旧策略\textbf{保证相似}
+    \item 不会突然崩溃
+    \item 自动调整参数空间的步长
+\end{itemize}
+
+\textbf{代价}：每次更新需要计算Fisher矩阵（或其近似），计算量大。
+\end{example}
+
+\begin{keypoint}[TRPO的理论保证]
+\textbf{单调改进}：在满足KL约束的情况下，TRPO保证$J(\theta_{\text{new}}) \geq J(\theta_{\text{old}}) - \epsilon$
+
+其中$\epsilon$取决于近似误差。
+
+\textbf{收敛性}：TRPO收敛到局部最优（在策略参数化允许的范围内）。
+
+\textbf{与信任域的联系}：
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+& 传统信任域 & TRPO \\
+\midrule
+变量 & $x \in \mathbb{R}^d$ & $\theta \in \mathbb{R}^d$ \\
+目标 & $f(x)$ & $J(\theta)$ \\
+约束 & $\|x - x_k\|_2 \leq \delta$ & $\text{KL}(\pi_\theta \| \pi_{\theta_k}) \leq \delta$ \\
+局部模型 & 二阶Taylor & 代理目标$L$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
+
+%=============================================================================
+\section{算法对比与总结}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{l|c|c|c|c}
+\toprule
+\textbf{算法} & \textbf{类型} & \textbf{方差} & \textbf{偏差} & \textbf{计算量} \\
+\midrule
+REINFORCE & Monte Carlo & 高 & 无 & 低 \\
++ Baseline & MC + 方差缩减 & 中 & 无 & 低 \\
+Actor-Critic & TD & 中 & 有（TD） & 中 \\
+Natural PG & 二阶方法 & 中 & 有 & 高 \\
+TRPO & 信任域 & 中 & 有 & 高 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keypoint}[优化视角的统一]
+\textbf{REINFORCE}：随机梯度上升
+
+\textbf{Baseline}：方差缩减技术（控制变量法）
+
+\textbf{Actor-Critic}：双层优化（内层评估，外层改进）
+
+\textbf{自然梯度}：预条件优化（Fisher预条件）
+
+\textbf{TRPO}：信任域方法（KL约束）
+\end{keypoint}
+
+\begin{magicbox}[本讲核心信息]
+\begin{enumerate}
+    \item \textbf{函数逼近}：用神经网络代替表格，解决维度诅咒
+    \item \textbf{DQN}：Experience Replay + Target Network实现稳定训练
+    \item \textbf{向量化环境}：并行仿真，加速100-1000倍
+    \item \textbf{策略梯度定理}：$\nabla J = \mathbb{E}[\nabla \log \pi \cdot Q]$，可用采样估计
+    \item \textbf{Baseline}：方差缩减，$b^* = V$时最优
+    \item \textbf{Actor-Critic}：双网络，实时更新
+    \item \textbf{Fisher信息}：度量参数变化对分布的影响
+    \item \textbf{自然梯度}：$F^{-1} \nabla J$，KL空间中的最速方向
+    \item \textbf{TRPO}：信任域约束，保证策略单调改进
+\end{enumerate}
+\end{magicbox}
+
+%=============================================================================
+\section*{课后练习}
+%=============================================================================
+
+\begin{enumerate}
+    \item \textbf{策略梯度}：对于确定性策略$\pi_\theta(s) = \theta^T \phi(s)$（线性策略），推导$\nabla_\theta J$。
+    
+    \item \textbf{Baseline}：证明最优baseline为$b^*(s) = \frac{\mathbb{E}[G^2 \|\nabla \log \pi\|^2]}{\mathbb{E}[\|\nabla \log \pi\|^2]}$（精确最小方差）。
+    
+    \item \textbf{Fisher信息}：对于高斯策略$\pi_\theta(a|s) = \mathcal{N}(\mu_\theta(s), \sigma^2)$，计算Fisher信息矩阵。
+    
+    \item \textbf{TRPO}：推导当$\delta \to 0$时，TRPO退化为自然梯度下降。
+    
+    \item \textbf{运筹学应用}：设计一个Actor-Critic算法用于动态车辆路径问题(DVRP)，说明状态、动作、奖励的设计。
+\end{enumerate}
+
+\subsection*{答案提示}
+
+\textbf{1.} 确定性策略梯度（DPG）：$\nabla_\theta J = \mathbb{E}[\nabla_a Q(s,a)|_{a=\pi(s)} \nabla_\theta \pi_\theta(s)]$
+
+\textbf{2.} 对$b$求导令其为零，需要考虑$\nabla \log \pi$的范数。
+
+\textbf{3.} 对于一维高斯，$F = 1/\sigma^2$（参数为$\mu$时）。
+
+\textbf{4.} $\delta \to 0$时，约束紧，TRPO步长趋于$\sqrt{2\delta/(g^T F^{-1} g)} F^{-1} g$，正比于$F^{-1} g$。
+
+\textbf{5.} 状态：(车辆位置，剩余容量，待服务客户)；动作：下一个访问客户；奖励：-行驶距离-延迟惩罚。
+
+\end{document}

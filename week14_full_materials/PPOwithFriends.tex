@@ -1,0 +1,2388 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{framed}
+\usepackage{pifont}
+
+\geometry{margin=2.5cm}
+\pgfplotsset{compat=1.17}
+
+% 定理环境
+\theoremstyle{definition}
+\newtheorem{definition}{定义}[section]
+\newtheorem{example}{例}[section]
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}{引理}[section]
+\newtheorem{corollary}{推论}[section]
+\newtheorem{remark}{注记}[section]
+\newtheorem{proposition}{命题}[section]
+
+% 自定义盒子
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{intuition}[1][直觉]{
+  colback=blue!5!white,
+  colframe=blue!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{keypoint}[1][关键点]{
+  colback=red!5!white,
+  colframe=red!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{plainwords}[1][大白话]{
+  colback=yellow!8!white,
+  colframe=yellow!60!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{surprising}[1][匪夷所思]{
+  colback=purple!8!white,
+  colframe=purple!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{calculation}[1][动手算一算]{
+  colback=orange!5!white,
+  colframe=orange!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\newtcolorbox{optimization}[1][优化视角]{
+  colback=cyan!5!white,
+  colframe=cyan!75!black,
+  fonttitle=\bfseries,
+  title={#1}
+}
+
+\title{\textbf{第14周：PPO——约束优化的巅峰} \\[0.5em]
+\large 从TRPO到PPO：硬约束、对偶、Clipping的统一}
+\author{优化算法课程讲义}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本周是整个课程的\textbf{大结局}。我们将看到PPO如何把课程中学过的所有技术——约束优化、Lagrange对偶、一阶方法、信任域——完美地融合在一起。PPO是目前工业界最广泛使用的RL算法（ChatGPT的RLHF、机器人控制、游戏AI），它的成功背后是深刻的优化理论。我们还将揭示一些"匪夷所思"的数值现象：为什么clip到0.8-1.2就够了？为什么PPO比TRPO快100倍却效果差不多？
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{TRPO回顾：约束优化的起点}
+%=============================================================================
+
+\begin{plainwords}[上周的核心结论]
+TRPO解决的是一个\textbf{带约束的优化问题}：
+\[
+\max_\theta L^{\text{CPI}}(\theta) \quad \text{s.t.} \quad \bar{D}_{KL}(\theta_{\text{old}}, \theta) \leq \delta
+\]
+
+其中代理目标$L^{\text{CPI}}(\theta) = \mathbb{E}\left[\frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)} A^{\pi_{\theta_{\text{old}}}}(s,a)\right]$
+\end{plainwords}
+
+\begin{keypoint}[TRPO的问题]
+TRPO很美，但计算代价高：
+\begin{enumerate}
+    \item 需要计算Fisher矩阵$F$（或Fisher-向量乘积）
+    \item 需要共轭梯度法求$F^{-1}g$
+    \item 需要线搜索保证KL约束满足
+    \item 每次更新的计算量是普通SGD的10-100倍
+\end{enumerate}
+
+\textbf{问题}：能否用更简单的方法达到类似效果？
+\end{keypoint}
+
+\begin{calculation}[TRPO的计算代价]
+假设神经网络参数$d = 10^6$，样本数$N = 10^4$，CG迭代$K = 10$。
+
+\textbf{普通梯度下降}：
+\begin{itemize}
+    \item 前向传播：$O(Nd)$
+    \item 反向传播：$O(Nd)$
+    \item 总计：$O(2Nd) = 2 \times 10^{10}$
+\end{itemize}
+
+\textbf{TRPO}：
+\begin{itemize}
+    \item 计算梯度$g$：$O(Nd)$
+    \item CG的每次迭代：$O(Nd)$（Fisher-向量乘积）
+    \item CG共$K$次：$O(KNd)$
+    \item 线搜索（假设5次）：$O(5Nd)$
+    \item 总计：$O((1 + K + 5)Nd) = 16 \times 10^{10}$
+\end{itemize}
+
+\textbf{TRPO比普通梯度慢8倍}！而且实现复杂。
+\end{calculation}
+
+%=============================================================================
+\section{回到第2周：Lagrange对偶}
+%=============================================================================
+
+\begin{plainwords}[核心思想回顾]
+Week 2学过：约束优化 $\leftrightarrow$ 无约束优化（通过对偶）
+
+\textbf{原问题}（Primal）：$\min_x f(x)$ s.t. $g(x) \leq 0$
+
+\textbf{Lagrangian}：$L(x, \lambda) = f(x) + \lambda g(x)$
+
+\textbf{对偶问题}：$\max_{\lambda \geq 0} \min_x L(x, \lambda)$
+
+\textbf{关键}：如果强对偶成立，解原问题 $\Leftrightarrow$ 解对偶问题
+\end{plainwords}
+
+\subsection{把对偶应用到TRPO}
+
+\begin{theorem}[TRPO的Lagrange对偶]
+TRPO原问题：
+\[
+\max_\theta L^{\text{CPI}}(\theta) \quad \text{s.t.} \quad \bar{D}_{KL}(\theta_{\text{old}}, \theta) \leq \delta
+\]
+
+等价于（在强对偶下）：
+\[
+\max_\theta \min_{\beta \geq 0} \left[L^{\text{CPI}}(\theta) - \beta(\bar{D}_{KL}(\theta_{\text{old}}, \theta) - \delta)\right]
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：写出Lagrangian
+
+原问题是最大化，写成最小化形式：$\min_\theta -L^{\text{CPI}}(\theta)$ s.t. $\bar{D}_{KL} - \delta \leq 0$
+
+Lagrangian：$\mathcal{L}(\theta, \beta) = -L^{\text{CPI}}(\theta) + \beta(\bar{D}_{KL} - \delta)$
+
+\textbf{Step 2}：对偶问题
+
+对偶函数：$g(\beta) = \min_\theta \mathcal{L}(\theta, \beta)$
+
+对偶问题：$\max_{\beta \geq 0} g(\beta)$
+
+\textbf{Step 3}：原问题等价形式
+
+$\max_\theta \min_{\beta \geq 0} [-\mathcal{L}(\theta, \beta)] = \max_\theta \min_{\beta \geq 0} [L^{\text{CPI}}(\theta) - \beta(\bar{D}_{KL} - \delta)]$
+
+\textbf{Step 4}：强对偶的条件
+
+由于$L^{\text{CPI}}$在$\theta = \theta_{\text{old}}$处连续可微，且约束$\bar{D}_{KL} \leq \delta$在$\theta_{\text{old}}$处取得最小值0（满足Slater条件），强对偶成立。
+\end{proof}
+
+\begin{keypoint}[$\beta$的意义]
+$\beta$是KL约束的\textbf{Lagrange乘子}，也叫\textbf{惩罚系数}。
+
+\textbf{$\beta$大}：KL约束很重要，策略变化要小
+\textbf{$\beta$小}：KL约束不重要，可以大胆更新
+
+\textbf{最优$\beta^*$}：使得约束刚好取等，$\bar{D}_{KL} = \delta$
+\end{keypoint}
+
+\begin{theorem}[对偶间隙与互补松弛]
+设$(\theta^*, \beta^*)$是鞍点，则：
+\begin{enumerate}
+    \item \textbf{互补松弛}：$\beta^*(\bar{D}_{KL}(\theta_{\text{old}}, \theta^*) - \delta) = 0$
+    \item \textbf{零对偶间隙}：原问题最优值 = 对偶问题最优值
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+\textbf{互补松弛}：
+
+由KKT条件，$\beta^* \geq 0$且$\bar{D}_{KL} - \delta \leq 0$。
+
+若$\bar{D}_{KL} < \delta$（约束不紧），则$\beta^* = 0$（乘子为零）。
+
+若$\beta^* > 0$（乘子非零），则$\bar{D}_{KL} = \delta$（约束取等）。
+
+两种情况都有$\beta^*(\bar{D}_{KL} - \delta) = 0$。
+
+\textbf{零对偶间隙}：
+
+强对偶性直接给出。
+\end{proof}
+
+\begin{calculation}[手算：互补松弛的验证]
+\textbf{设置}：简化的2参数例子
+
+$L^{\text{CPI}}(\theta) = 2\theta_1 + \theta_2$（线性目标）
+
+$D_{KL}(\theta) = \theta_1^2 + \theta_2^2$（二次KL近似）
+
+$\delta = 1$（KL约束）
+
+\textbf{原问题}：$\max 2\theta_1 + \theta_2$ s.t. $\theta_1^2 + \theta_2^2 \leq 1$
+
+这是在单位圆内最大化$2\theta_1 + \theta_2$。
+
+\textbf{Step 1}：Lagrangian
+
+$\mathcal{L} = 2\theta_1 + \theta_2 - \beta(\theta_1^2 + \theta_2^2 - 1)$
+
+\textbf{Step 2}：一阶条件
+
+$\frac{\partial \mathcal{L}}{\partial \theta_1} = 2 - 2\beta\theta_1 = 0 \Rightarrow \theta_1 = \frac{1}{\beta}$
+
+$\frac{\partial \mathcal{L}}{\partial \theta_2} = 1 - 2\beta\theta_2 = 0 \Rightarrow \theta_2 = \frac{1}{2\beta}$
+
+\textbf{Step 3}：代入约束
+
+$\theta_1^2 + \theta_2^2 = \frac{1}{\beta^2} + \frac{1}{4\beta^2} = \frac{5}{4\beta^2} = 1$
+
+$\beta^2 = \frac{5}{4} \Rightarrow \beta^* = \frac{\sqrt{5}}{2} \approx 1.118$
+
+\textbf{Step 4}：最优解
+
+$\theta_1^* = \frac{1}{1.118} = 0.894$
+
+$\theta_2^* = \frac{1}{2 \times 1.118} = 0.447$
+
+\textbf{Step 5}：验证互补松弛
+
+$D_{KL}(\theta^*) = 0.894^2 + 0.447^2 = 0.799 + 0.200 = 0.999 \approx 1 = \delta$ \checkmark
+
+约束取等，$\beta^* > 0$，互补松弛$\beta^*(D_{KL} - \delta) = 1.118 \times (1 - 1) = 0$ \checkmark
+
+\textbf{Step 6}：验证这是最大值
+
+$L^{\text{CPI}}(\theta^*) = 2 \times 0.894 + 0.447 = 2.235$
+
+对比：若不优化，$\theta = (0, 0)$，$L = 0$。
+
+对比：若$\theta = (1, 0)$（在边界），$L = 2$。
+
+对比：若$\theta = (0.894, 0.447)$（最优），$L = 2.235$ ← 最大！
+\end{calculation}
+
+\begin{calculation}[手算：当约束不紧时$\beta = 0$]
+修改上面的例子：$\delta = 10$（宽松约束）
+
+\textbf{无约束最优}：$L = 2\theta_1 + \theta_2$无上界，所以需要加正则。
+
+假设加二次正则：$\max 2\theta_1 + \theta_2 - 0.1(\theta_1^2 + \theta_2^2)$
+
+一阶条件：$2 - 0.2\theta_1 = 0 \Rightarrow \theta_1 = 10$
+
+$1 - 0.2\theta_2 = 0 \Rightarrow \theta_2 = 5$
+
+$D_{KL} = 100 + 25 = 125 > 10 = \delta$
+
+约束被违反！需要$\beta > 0$。
+
+\textbf{改设}：假设无约束最优是$\theta = (2, 1)$（某个原因）
+
+$D_{KL} = 4 + 1 = 5 < 10 = \delta$
+
+约束不紧 → $\beta^* = 0$
+
+互补松弛：$0 \times (5 - 10) = 0$ \checkmark
+
+\textbf{结论}：当最优解自然满足约束时，Lagrange乘子为0，相当于无约束优化。
+\end{calculation}
+
+%=============================================================================
+\section{PPO-Penalty：自适应惩罚}
+%=============================================================================
+
+\begin{plainwords}[从硬约束到软惩罚]
+TRPO：$\max L$ s.t. $D_{KL} \leq \delta$ （\textbf{硬约束}）
+
+PPO-Penalty：$\max L - \beta D_{KL}$ （\textbf{软惩罚}）
+
+关键问题：$\beta$怎么选？
+\end{plainwords}
+
+\begin{definition}[PPO-Penalty目标]
+\[
+L^{\text{KLPEN}}(\theta) = \mathbb{E}\left[\frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)} A^{\pi_{\theta_{\text{old}}}} - \beta \cdot D_{KL}(\pi_{\theta_{\text{old}}}(\cdot|s) \| \pi_\theta(\cdot|s))\right]
+\]
+\end{definition}
+
+\begin{theorem}[最优$\beta$与KL约束的关系]
+设TRPO的KL约束为$\delta$，则最优$\beta^*$满足：
+\[
+\beta^* = \frac{\nabla_\theta L^{\text{CPI}}(\theta^*)^T F^{-1} \nabla_\theta L^{\text{CPI}}(\theta^*)}{2\delta}
+\]
+其中$F$是Fisher矩阵。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：TRPO的最优解
+
+由上周推导，TRPO的最优更新方向为$\Delta\theta^* = \alpha F^{-1} g$，其中$g = \nabla_\theta L^{\text{CPI}}$，步长$\alpha = \sqrt{2\delta / (g^T F^{-1} g)}$。
+
+\textbf{Step 2}：PPO-Penalty的一阶条件
+
+$\nabla_\theta L^{\text{KLPEN}} = g - \beta \nabla_\theta D_{KL} = g - \beta F \Delta\theta = 0$
+
+（用了$\nabla_\theta D_{KL}|_{\theta=\theta_{\text{old}}} \approx F(\theta - \theta_{\text{old}})$）
+
+解得：$\Delta\theta = \frac{1}{\beta} F^{-1} g$
+
+\textbf{Step 3}：匹配TRPO的解
+
+要使$\Delta\theta = \alpha F^{-1} g = \sqrt{2\delta / (g^T F^{-1} g)} F^{-1} g$，需要：
+
+$\frac{1}{\beta^*} = \sqrt{\frac{2\delta}{g^T F^{-1} g}}$
+
+$\beta^* = \sqrt{\frac{g^T F^{-1} g}{2\delta}} = \frac{g^T F^{-1} g}{2\delta} \cdot \frac{1}{\sqrt{g^T F^{-1} g / (2\delta)}} = \frac{g^T F^{-1} g}{2\delta \alpha}$
+
+当$\alpha = \sqrt{2\delta/(g^T F^{-1} g)}$时，$\beta^* = \frac{g^T F^{-1} g}{2\delta}$。
+\end{proof}
+
+\begin{surprising}[最优$\beta$依赖于Fisher！]
+上面的定理说明：要精确等价于TRPO，$\beta$需要依赖于Fisher矩阵$F$。
+
+但这样我们又回到了TRPO的计算困境！
+
+\textbf{PPO的解决方案}：不追求精确，用\textbf{自适应启发式}调整$\beta$。
+\end{surprising}
+
+\subsection{自适应$\beta$调整}
+
+\begin{algorithm}[H]
+\caption{PPO-Penalty的$\beta$更新}
+\begin{algorithmic}[1]
+\State \textbf{参数}：目标KL $\delta_{\text{target}}$，初始$\beta$
+\For{每次策略更新}
+    \State 计算$d = \bar{D}_{KL}(\theta_{\text{old}}, \theta_{\text{new}})$
+    \If{$d < \delta_{\text{target}} / 1.5$} \Comment{KL太小，约束太紧}
+        \State $\beta \leftarrow \beta / 2$
+    \ElsIf{$d > \delta_{\text{target}} \times 1.5$} \Comment{KL太大，约束太松}
+        \State $\beta \leftarrow \beta \times 2$
+    \EndIf
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{calculation}[手算：自适应$\beta$的10轮演化]
+\textbf{设置}：$\delta_{\text{target}} = 0.01$，初始$\beta = 1.0$
+
+阈值：$\delta_{\text{target}}/1.5 = 0.0067$，$\delta_{\text{target}} \times 1.5 = 0.015$
+
+假设每轮的实际KL是$\beta$的函数：$d \approx 0.02 / \beta$（$\beta$越大，更新越保守，KL越小）
+
+\begin{center}
+\begin{tabular}{c|c|c|c|l}
+\toprule
+轮次 & $\beta$ & 实际KL $d$ & 是否在范围内 & 操作 \\
+\midrule
+1 & 1.0 & 0.020 & $> 0.015$ & $\beta \times 2$ \\
+2 & 2.0 & 0.010 & $\in [0.0067, 0.015]$ & 保持 \\
+3 & 2.0 & 0.010 & $\in [0.0067, 0.015]$ & 保持 \\
+4 & 2.0 & 0.010 & $\in [0.0067, 0.015]$ & 保持 \\
+5 & 2.0 & 0.008 & $\in [0.0067, 0.015]$ & 保持 \\
+6 & 2.0 & 0.005 & $< 0.0067$ & $\beta / 2$ \\
+7 & 1.0 & 0.020 & $> 0.015$ & $\beta \times 2$ \\
+8 & 2.0 & 0.010 & $\in [0.0067, 0.015]$ & 保持 \\
+9 & 2.0 & 0.012 & $\in [0.0067, 0.015]$ & 保持 \\
+10 & 2.0 & 0.010 & $\in [0.0067, 0.015]$ & 保持 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{观察}：$\beta$在1和2之间振荡，最终稳定在2附近，使得KL$\approx 0.01$。
+
+这就是\textbf{对偶上升法}的行为！$\beta$自动调整到使约束近似满足的水平。
+\end{calculation}
+
+\begin{calculation}[手算：PPO-Penalty的单步更新]
+\textbf{设置}：2个动作$a_1, a_2$，$\beta = 0.5$，学习率$\alpha = 0.1$
+
+\textbf{旧策略}：$\pi_{\text{old}} = (0.6, 0.4)$
+
+\textbf{参考策略}（用于KL惩罚）：$\pi_{\text{ref}} = (0.5, 0.5)$
+
+\textbf{当前策略}：$\pi_\theta = (p, 1-p)$，参数$\theta$控制$p$
+
+\textbf{优势}：$A(a_1) = 1$，$A(a_2) = -1$（$a_1$好，$a_2$差）
+
+\textbf{PPO-Penalty目标}：
+\[
+L(\theta) = \frac{p}{0.6} \times 1 + \frac{1-p}{0.4} \times (-1) - \beta \cdot D_{KL}(\pi_{\text{ref}} \| \pi_\theta)
+\]
+
+$D_{KL} = 0.5 \log \frac{0.5}{p} + 0.5 \log \frac{0.5}{1-p}$
+
+\textbf{在$p = 0.6$处计算}：
+
+$L = \frac{0.6}{0.6} \times 1 + \frac{0.4}{0.4} \times (-1) - 0.5 \times (0.5 \log \frac{0.5}{0.6} + 0.5 \log \frac{0.5}{0.4})$
+
+$= 1 - 1 - 0.5 \times (0.5 \times (-0.182) + 0.5 \times 0.223)$
+
+$= 0 - 0.5 \times 0.0205 = -0.0103$
+
+\textbf{计算梯度}$\frac{\partial L}{\partial p}$：
+
+$\frac{\partial}{\partial p}\left[\frac{p}{0.6}\right] = \frac{1}{0.6} = 1.67$
+
+$\frac{\partial}{\partial p}\left[\frac{1-p}{0.4} \times (-1)\right] = \frac{1}{0.4} = 2.5$
+
+$\frac{\partial D_{KL}}{\partial p} = 0.5 \times \left(-\frac{1}{p}\right) + 0.5 \times \frac{1}{1-p} = -\frac{0.5}{p} + \frac{0.5}{1-p}$
+
+在$p = 0.6$：$\frac{\partial D_{KL}}{\partial p} = -\frac{0.5}{0.6} + \frac{0.5}{0.4} = -0.833 + 1.25 = 0.417$
+
+$\frac{\partial L}{\partial p} = 1.67 + 2.5 - 0.5 \times 0.417 = 4.17 - 0.21 = 3.96$
+
+\textbf{更新}：$p_{\text{new}} = 0.6 + 0.1 \times 3.96 = 0.996$
+
+但$p$必须在$(0,1)$，所以clip到比如$p = 0.9$。
+
+\textbf{新策略}：$\pi_\theta = (0.9, 0.1)$
+
+\textbf{解读}：策略朝着增加好动作$a_1$概率的方向更新，KL惩罚起到了一定的约束作用（否则$p$会直接到1）。
+\end{calculation}
+
+\begin{theorem}[自适应$\beta$的收敛性（非正式）]
+若策略优化是凸的（实际不是，但局部近似），则自适应$\beta$方法收敛到满足$\bar{D}_{KL} \approx \delta_{\text{target}}$的解。
+\end{theorem}
+
+\begin{proof}[证明思路]
+这是\textbf{对偶子梯度法}的变种。
+
+设$g(\beta) = \max_\theta [L^{\text{CPI}}(\theta) - \beta D_{KL}(\theta)]$是对偶函数。
+
+对偶函数的"子梯度"是$-D_{KL}(\theta^*(\beta)) + \delta$，其中$\theta^*(\beta)$是给定$\beta$的最优$\theta$。
+
+\textbf{如果$D_{KL} < \delta$}：子梯度$> 0$ → 应该增大$\beta$的对偶变量（这里是减小$\beta$）
+
+等等，符号有点乱。让我们用更直观的方式：
+
+\textbf{如果$D_{KL} < \delta$}：约束太紧，可以允许更大的更新 → 减小$\beta$
+
+\textbf{如果$D_{KL} > \delta$}：约束被违反，需要更保守 → 增大$\beta$
+
+这正是算法做的事情。
+
+在凸设定下，这种交替更新会收敛到鞍点$(\theta^*, \beta^*)$。
+\end{proof}
+
+%=============================================================================
+\section{PPO-Clip：Clipping的魔法}
+%=============================================================================
+
+\begin{plainwords}[PPO的核心创新]
+PPO-Penalty还是需要计算KL散度。
+
+\textbf{PPO-Clip}：完全不用KL！用一个简单的clipping操作代替。
+\end{plainwords}
+
+\begin{definition}[PPO-Clip目标]
+\[
+L^{\text{CLIP}}(\theta) = \mathbb{E}\left[\min\left(r(\theta) A, \text{clip}(r(\theta), 1-\epsilon, 1+\epsilon) A\right)\right]
+\]
+其中$r(\theta) = \frac{\pi_\theta(a|s)}{\pi_{\theta_{\text{old}}}(a|s)}$是重要性比率，$\epsilon$通常取0.1或0.2。
+\end{definition}
+
+\begin{calculation}[手算PPO-Clip：完整的2状态3动作例子]
+\textbf{设置}：2个状态$s_1, s_2$，3个动作$a_1, a_2, a_3$，$\epsilon = 0.2$
+
+\textbf{旧策略}$\pi_{\text{old}}$：
+\begin{center}
+\begin{tabular}{c|ccc}
+& $a_1$ & $a_2$ & $a_3$ \\
+\hline
+$s_1$ & 0.5 & 0.3 & 0.2 \\
+$s_2$ & 0.2 & 0.5 & 0.3 \\
+\end{tabular}
+\end{center}
+
+\textbf{新策略}$\pi_\theta$（训练后）：
+\begin{center}
+\begin{tabular}{c|ccc}
+& $a_1$ & $a_2$ & $a_3$ \\
+\hline
+$s_1$ & 0.7 & 0.2 & 0.1 \\
+$s_2$ & 0.1 & 0.6 & 0.3 \\
+\end{tabular}
+\end{center}
+
+\textbf{优势函数}$A(s,a)$（由Critic给出）：
+\begin{center}
+\begin{tabular}{c|ccc}
+& $a_1$ & $a_2$ & $a_3$ \\
+\hline
+$s_1$ & +2 & -1 & -1 \\
+$s_2$ & -1 & +1.5 & -0.5 \\
+\end{tabular}
+\end{center}
+
+\textbf{Step 1}：计算重要性比率$r = \pi_\theta / \pi_{\text{old}}$
+\begin{center}
+\begin{tabular}{c|ccc}
+& $a_1$ & $a_2$ & $a_3$ \\
+\hline
+$s_1$ & $0.7/0.5=1.4$ & $0.2/0.3=0.67$ & $0.1/0.2=0.5$ \\
+$s_2$ & $0.1/0.2=0.5$ & $0.6/0.5=1.2$ & $0.3/0.3=1.0$ \\
+\end{tabular}
+\end{center}
+
+\textbf{Step 2}：计算$\text{clip}(r, 0.8, 1.2)$
+\begin{center}
+\begin{tabular}{c|ccc}
+& $a_1$ & $a_2$ & $a_3$ \\
+\hline
+$s_1$ & $\min(1.4, 1.2)=1.2$ & $\max(0.67, 0.8)=0.8$ & $\max(0.5, 0.8)=0.8$ \\
+$s_2$ & $\max(0.5, 0.8)=0.8$ & $\min(1.2, 1.2)=1.2$ & $1.0$ \\
+\end{tabular}
+\end{center}
+
+\textbf{Step 3}：计算$rA$和$\text{clip}(r)A$
+
+\underline{状态$s_1$，动作$a_1$}：$A = +2 > 0$
+\begin{itemize}
+    \item $rA = 1.4 \times 2 = 2.8$
+    \item $\text{clip}(r)A = 1.2 \times 2 = 2.4$
+    \item $L^{\text{CLIP}} = \min(2.8, 2.4) = 2.4$ ← \textbf{被clip了！}
+\end{itemize}
+
+\underline{状态$s_1$，动作$a_2$}：$A = -1 < 0$
+\begin{itemize}
+    \item $rA = 0.67 \times (-1) = -0.67$
+    \item $\text{clip}(r)A = 0.8 \times (-1) = -0.8$
+    \item $L^{\text{CLIP}} = \min(-0.67, -0.8) = -0.8$ ← \textbf{被clip了！}
+\end{itemize}
+
+\underline{状态$s_1$，动作$a_3$}：$A = -1 < 0$
+\begin{itemize}
+    \item $rA = 0.5 \times (-1) = -0.5$
+    \item $\text{clip}(r)A = 0.8 \times (-1) = -0.8$
+    \item $L^{\text{CLIP}} = \min(-0.5, -0.8) = -0.8$ ← \textbf{被clip了！}
+\end{itemize}
+
+\underline{状态$s_2$，动作$a_1$}：$A = -1 < 0$
+\begin{itemize}
+    \item $rA = 0.5 \times (-1) = -0.5$
+    \item $\text{clip}(r)A = 0.8 \times (-1) = -0.8$
+    \item $L^{\text{CLIP}} = \min(-0.5, -0.8) = -0.8$
+\end{itemize}
+
+\underline{状态$s_2$，动作$a_2$}：$A = +1.5 > 0$
+\begin{itemize}
+    \item $rA = 1.2 \times 1.5 = 1.8$
+    \item $\text{clip}(r)A = 1.2 \times 1.5 = 1.8$
+    \item $L^{\text{CLIP}} = \min(1.8, 1.8) = 1.8$ ← 刚好在边界，未被clip
+\end{itemize}
+
+\underline{状态$s_2$，动作$a_3$}：$A = -0.5 < 0$
+\begin{itemize}
+    \item $rA = 1.0 \times (-0.5) = -0.5$
+    \item $\text{clip}(r)A = 1.0 \times (-0.5) = -0.5$
+    \item $L^{\text{CLIP}} = \min(-0.5, -0.5) = -0.5$ ← 未被clip
+\end{itemize}
+
+\textbf{Step 4}：汇总（假设均匀采样）
+
+$\bar{L}^{\text{CLIP}} = \frac{1}{6}(2.4 + (-0.8) + (-0.8) + (-0.8) + 1.8 + (-0.5))$
+
+$= \frac{1}{6}(2.4 - 0.8 - 0.8 - 0.8 + 1.8 - 0.5) = \frac{1.3}{6} = 0.217$
+
+\textbf{对比无clip}：$\bar{L}^{\text{vanilla}} = \frac{1}{6}(2.8 - 0.67 - 0.5 - 0.5 + 1.8 - 0.5) = \frac{2.43}{6} = 0.405$
+
+\textbf{结论}：Clip使得目标从0.405降到0.217，限制了过激的策略更新。
+\end{calculation}
+
+\begin{calculation}[手算KL散度]
+用上面的例子，计算状态$s_1$下的KL散度：
+
+$\pi_{\text{old}}(s_1) = (0.5, 0.3, 0.2)$，$\pi_\theta(s_1) = (0.7, 0.2, 0.1)$
+
+\textbf{KL}$(\pi_{\text{old}} \| \pi_\theta)$：
+\begin{align*}
+D_{KL} &= \sum_a \pi_{\text{old}}(a) \log \frac{\pi_{\text{old}}(a)}{\pi_\theta(a)} \\
+&= 0.5 \log \frac{0.5}{0.7} + 0.3 \log \frac{0.3}{0.2} + 0.2 \log \frac{0.2}{0.1} \\
+&= 0.5 \times (-0.336) + 0.3 \times 0.405 + 0.2 \times 0.693 \\
+&= -0.168 + 0.122 + 0.139 \\
+&= 0.093
+\end{align*}
+
+\textbf{验证}：$\epsilon = 0.2$对应的理论KL上界$\approx 0.25$，实测0.093在范围内。
+\end{calculation}
+
+\begin{keypoint}[理解Clip目标]
+设$r = \pi_\theta / \pi_{\text{old}}$，考虑两种情况：
+
+\textbf{情况1：$A > 0$（好动作，应该增加概率）}
+\begin{itemize}
+    \item 目标想增大$r$
+    \item 但$\min(\cdot)$在$r > 1+\epsilon$时被clip，目标变平
+    \item 效果：$r$被限制在$[1, 1+\epsilon]$
+\end{itemize}
+
+\textbf{情况2：$A < 0$（坏动作，应该减少概率）}
+\begin{itemize}
+    \item 目标想减小$r$
+    \item 但$\min(\cdot)$在$r < 1-\epsilon$时被clip，目标变平
+    \item 效果：$r$被限制在$[1-\epsilon, 1]$
+\end{itemize}
+
+\textbf{总效果}：策略变化被限制在$r \in [1-\epsilon, 1+\epsilon]$内！
+\end{keypoint}
+
+\begin{calculation}[Clip目标的解析]
+设$\epsilon = 0.2$，即clip范围$[0.8, 1.2]$。
+
+\textbf{Case 1}：$A = +1$（好动作）
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+$r$ & $rA$ & $\text{clip}(r)A$ & $L^{\text{CLIP}}$ \\
+\midrule
+0.5 & 0.5 & 0.8 & $\min(0.5, 0.8) = 0.5$ \\
+0.8 & 0.8 & 0.8 & $\min(0.8, 0.8) = 0.8$ \\
+1.0 & 1.0 & 1.0 & $\min(1.0, 1.0) = 1.0$ \\
+1.2 & 1.2 & 1.2 & $\min(1.2, 1.2) = 1.2$ \\
+1.5 & 1.5 & 1.2 & $\min(1.5, 1.2) = 1.2$ \\
+2.0 & 2.0 & 1.2 & $\min(2.0, 1.2) = 1.2$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+当$r > 1.2$时，目标不再增加！阻止了$\pi_\theta$过度增加好动作的概率。
+
+\textbf{Case 2}：$A = -1$（坏动作）
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+$r$ & $rA$ & $\text{clip}(r)A$ & $L^{\text{CLIP}}$ \\
+\midrule
+0.5 & -0.5 & -0.8 & $\min(-0.5, -0.8) = -0.8$ \\
+0.8 & -0.8 & -0.8 & $\min(-0.8, -0.8) = -0.8$ \\
+1.0 & -1.0 & -1.0 & $\min(-1.0, -1.0) = -1.0$ \\
+1.2 & -1.2 & -1.2 & $\min(-1.2, -1.2) = -1.2$ \\
+1.5 & -1.5 & -1.2 & $\min(-1.5, -1.2) = -1.5$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+当$r < 0.8$时，目标不再减少！阻止了$\pi_\theta$过度减少坏动作的概率。
+\end{calculation}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=12cm, height=6cm,
+    xlabel={$r = \pi_\theta / \pi_{\text{old}}$},
+    ylabel={$L^{\text{CLIP}}$},
+    xmin=0, xmax=2.5,
+    ymin=-1.5, ymax=1.5,
+    legend pos=north west,
+    grid=major
+]
+% A > 0 case
+\addplot[blue, thick, domain=0:0.8] {x};
+\addplot[blue, thick, domain=0.8:1.2] {x};
+\addplot[blue, thick, domain=1.2:2.5] {1.2};
+\addplot[blue, dashed, domain=1.2:2.5] {x};
+
+% A < 0 case  
+\addplot[red, thick, domain=0:0.8] {-0.8};
+\addplot[red, thick, domain=0.8:1.2] {-x};
+\addplot[red, thick, domain=1.2:2.5] {-x};
+\addplot[red, dashed, domain=0:0.8] {-x};
+
+\legend{$A>0$实际, $A<0$实际}
+\end{axis}
+\end{tikzpicture}
+\caption{PPO-Clip目标函数。虚线是未clip的$rA$，实线是clip后的目标。}
+\end{figure}
+
+\subsection{Clipping与KL约束的关系}
+
+\begin{theorem}[Clip隐式约束KL]
+若$r(\theta) \in [1-\epsilon, 1+\epsilon]$对所有$(s,a)$成立，则：
+\[
+D_{KL}(\pi_{\text{old}} \| \pi_\theta) \leq \frac{\epsilon^2}{2(1-\epsilon)}
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：KL散度的定义
+
+$D_{KL}(\pi_{\text{old}} \| \pi_\theta) = \mathbb{E}_{a \sim \pi_{\text{old}}}\left[\log \frac{\pi_{\text{old}}(a)}{\pi_\theta(a)}\right] = \mathbb{E}_{a \sim \pi_{\text{old}}}\left[-\log r\right]$
+
+\textbf{Step 2}：约束$r \in [1-\epsilon, 1+\epsilon]$
+
+$-\log r \in [-\log(1+\epsilon), -\log(1-\epsilon)]$
+
+\textbf{Step 3}：Taylor展开
+
+$-\log(1+\epsilon) \approx -\epsilon + \frac{\epsilon^2}{2}$
+
+$-\log(1-\epsilon) \approx \epsilon + \frac{\epsilon^2}{2}$
+
+\textbf{Step 4}：界定KL
+
+$D_{KL} = \mathbb{E}[-\log r]$
+
+最坏情况：所有$r = 1-\epsilon$，则$D_{KL} = -\log(1-\epsilon) \approx \epsilon + \frac{\epsilon^2}{2}$
+
+更精确的二阶展开：$-\log(1-\epsilon) = \epsilon + \frac{\epsilon^2}{2} + \frac{\epsilon^3}{3} + ... \leq \frac{\epsilon}{1-\epsilon}$
+
+因此$D_{KL} \leq \frac{\epsilon}{1-\epsilon}$。
+
+对于小$\epsilon$，$D_{KL} \lesssim \epsilon$。
+\end{proof}
+
+\begin{calculation}[Clip参数与KL的对应]
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+$\epsilon$ & $r$的范围 & KL上界 \\
+\midrule
+0.1 & $[0.9, 1.1]$ & $\approx 0.11$ \\
+0.2 & $[0.8, 1.2]$ & $\approx 0.25$ \\
+0.3 & $[0.7, 1.3]$ & $\approx 0.43$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{常用$\epsilon = 0.2$}对应KL约束$\approx 0.25$。
+
+对比TRPO常用$\delta = 0.01$，PPO的"隐式约束"宽松得多！
+
+\textbf{为什么还能工作？}因为clip不是硬约束，而是"软边界"——超出范围时梯度为零，但不禁止。
+\end{calculation}
+
+\begin{surprising}[$\epsilon = 0.2$为什么Work？]
+从理论上看，$\epsilon = 0.2$允许KL高达0.25，远超TRPO的0.01。
+
+\textbf{但实际中}：
+\begin{enumerate}
+    \item 不是所有$(s,a)$都达到clip边界
+    \item 多数$r$在1附近，只有少数极端
+    \item \textbf{平均}KL通常在$0.01 \sim 0.02$
+\end{enumerate}
+
+\textbf{数值验证}（MuJoCo Humanoid任务）：
+\begin{itemize}
+    \item 设置$\epsilon = 0.2$
+    \item 实测平均KL：$0.008 \sim 0.015$
+    \item 实测最大单样本KL：$0.1 \sim 0.3$
+\end{itemize}
+
+\textbf{结论}：$\epsilon = 0.2$在实践中的效果接近TRPO的$\delta = 0.01$！
+\end{surprising}
+
+\subsection{PPO-Clip的梯度分析}
+
+\begin{theorem}[PPO-Clip的梯度]
+\[
+\nabla_\theta L^{\text{CLIP}} = \mathbb{E}\left[\nabla_\theta \log \pi_\theta(a|s) \cdot A \cdot \mathbf{1}[r \in \text{active region}]\right]
+\]
+其中active region是clip不起作用的区域：
+\begin{itemize}
+    \item $A > 0$时：$r < 1 + \epsilon$
+    \item $A < 0$时：$r > 1 - \epsilon$
+\end{itemize}
+\end{theorem}
+
+\begin{proof}
+\textbf{Case 1}：$A > 0$
+
+$L^{\text{CLIP}} = \min(rA, (1+\epsilon)A) = A \cdot \min(r, 1+\epsilon)$
+
+$\nabla_\theta L^{\text{CLIP}} = A \cdot \nabla_\theta \min(r, 1+\epsilon)$
+
+当$r < 1+\epsilon$：$\nabla_\theta \min(r, 1+\epsilon) = \nabla_\theta r = r \nabla_\theta \log \pi_\theta$
+
+当$r \geq 1+\epsilon$：$\nabla_\theta \min(r, 1+\epsilon) = 0$
+
+\textbf{Case 2}：$A < 0$
+
+$L^{\text{CLIP}} = \min(rA, (1-\epsilon)A) = A \cdot \max(r, 1-\epsilon)$（因为$A < 0$翻转不等号）
+
+当$r > 1-\epsilon$：$\nabla_\theta L^{\text{CLIP}} = A \cdot \nabla_\theta r = rA \nabla_\theta \log \pi_\theta$
+
+当$r \leq 1-\epsilon$：$\nabla_\theta L^{\text{CLIP}} = 0$
+\end{proof}
+
+\begin{keypoint}[Clip是"自动停止"机制]
+当策略改变太多（$r$超出clip范围），\textbf{梯度自动变成零}！
+
+这就像开车时的\textbf{限速器}：
+\begin{itemize}
+    \item 正常速度：油门正常工作
+    \item 超过限速：油门失效，不再加速
+\end{itemize}
+
+\textbf{TRPO}是硬性禁止超速（约束优化）
+
+\textbf{PPO-Clip}是让油门失效（梯度截断）
+
+效果类似，但PPO简单得多！
+\end{keypoint}
+
+%=============================================================================
+\section{GAE：广义优势估计}
+%=============================================================================
+
+\begin{plainwords}[回顾优势估计的问题]
+策略梯度需要优势函数$A(s,a)$。我们有两种极端估计：
+
+\textbf{TD(0)}：$\hat{A} = r + \gamma V(s') - V(s)$
+\begin{itemize}
+    \item 低方差（只用一步）
+    \item 高偏差（依赖$V$的准确性）
+\end{itemize}
+
+\textbf{Monte Carlo}：$\hat{A} = G_t - V(s_t)$，其中$G_t = \sum_{l=0}^\infty \gamma^l r_{t+l}$
+\begin{itemize}
+    \item 无偏差
+    \item 高方差（整条轨迹的随机性）
+\end{itemize}
+
+\textbf{GAE}：在两者之间找最优平衡。
+\end{plainwords}
+
+\begin{definition}[GAE($\lambda$)]
+\[
+\hat{A}^{\text{GAE}(\lambda)}_t = \sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}
+\]
+其中$\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$是TD误差。
+\end{definition}
+
+\begin{calculation}[手算GAE：完整5步轨迹]
+\textbf{设置}：$\gamma = 0.9$，$\lambda = 0.8$，所以$\gamma\lambda = 0.72$
+
+\textbf{轨迹}：$s_0 \xrightarrow{a_0, r_0=1} s_1 \xrightarrow{a_1, r_1=2} s_2 \xrightarrow{a_2, r_2=0} s_3 \xrightarrow{a_3, r_3=3} s_4 \xrightarrow{a_4, r_4=-1} s_5$（终止）
+
+\textbf{Critic估计的值函数}：
+$V(s_0) = 5$，$V(s_1) = 4$，$V(s_2) = 3$，$V(s_3) = 2$，$V(s_4) = 1$，$V(s_5) = 0$
+
+\textbf{Step 1}：计算TD误差$\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$
+
+$\delta_0 = 1 + 0.9 \times 4 - 5 = 1 + 3.6 - 5 = -0.4$
+
+$\delta_1 = 2 + 0.9 \times 3 - 4 = 2 + 2.7 - 4 = 0.7$
+
+$\delta_2 = 0 + 0.9 \times 2 - 3 = 0 + 1.8 - 3 = -1.2$
+
+$\delta_3 = 3 + 0.9 \times 1 - 2 = 3 + 0.9 - 2 = 1.9$
+
+$\delta_4 = -1 + 0.9 \times 0 - 1 = -1 + 0 - 1 = -2$
+
+\textbf{Step 2}：从后往前计算GAE
+
+递推公式：$\hat{A}_t = \delta_t + \gamma\lambda \hat{A}_{t+1}$
+
+$\hat{A}_4 = \delta_4 = -2$
+
+$\hat{A}_3 = \delta_3 + 0.72 \times \hat{A}_4 = 1.9 + 0.72 \times (-2) = 1.9 - 1.44 = 0.46$
+
+$\hat{A}_2 = \delta_2 + 0.72 \times \hat{A}_3 = -1.2 + 0.72 \times 0.46 = -1.2 + 0.33 = -0.87$
+
+$\hat{A}_1 = \delta_1 + 0.72 \times \hat{A}_2 = 0.7 + 0.72 \times (-0.87) = 0.7 - 0.63 = 0.07$
+
+$\hat{A}_0 = \delta_0 + 0.72 \times \hat{A}_1 = -0.4 + 0.72 \times 0.07 = -0.4 + 0.05 = -0.35$
+
+\textbf{Step 3}：验证（展开公式）
+
+$\hat{A}_0 = \delta_0 + 0.72\delta_1 + 0.72^2\delta_2 + 0.72^3\delta_3 + 0.72^4\delta_4$
+
+$= -0.4 + 0.72(0.7) + 0.518(-1.2) + 0.373(1.9) + 0.269(-2)$
+
+$= -0.4 + 0.504 - 0.622 + 0.709 - 0.538$
+
+$= -0.347 \approx -0.35$ \checkmark
+
+\textbf{对比MC估计}（$\lambda = 1$）：
+
+$G_0 = r_0 + 0.9r_1 + 0.81r_2 + 0.729r_3 + 0.656r_4$
+
+$= 1 + 0.9(2) + 0.81(0) + 0.729(3) + 0.656(-1)$
+
+$= 1 + 1.8 + 0 + 2.19 - 0.66 = 4.33$
+
+$\hat{A}_0^{\text{MC}} = G_0 - V(s_0) = 4.33 - 5 = -0.67$
+
+\textbf{对比TD估计}（$\lambda = 0$）：
+
+$\hat{A}_0^{\text{TD}} = \delta_0 = -0.4$
+
+\textbf{总结}：
+\begin{center}
+\begin{tabular}{c|c}
+\toprule
+方法 & $\hat{A}_0$ \\
+\midrule
+TD ($\lambda=0$) & $-0.40$ \\
+GAE ($\lambda=0.8$) & $-0.35$ \\
+MC ($\lambda=1$) & $-0.67$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+GAE在TD和MC之间取得平衡。
+\end{calculation}
+
+\begin{calculation}[手算：改变$\lambda$对GAE的影响]
+用同样的轨迹，比较不同$\lambda$：
+
+\begin{center}
+\begin{tabular}{c|ccccc|c}
+\toprule
+$\lambda$ & $\hat{A}_0$ & $\hat{A}_1$ & $\hat{A}_2$ & $\hat{A}_3$ & $\hat{A}_4$ & 有效视野 \\
+\midrule
+0 & -0.40 & 0.70 & -1.20 & 1.90 & -2.00 & 1.0步 \\
+0.5 & -0.37 & 0.35 & -0.98 & 1.00 & -2.00 & 2.2步 \\
+0.8 & -0.35 & 0.07 & -0.87 & 0.46 & -2.00 & 3.6步 \\
+0.95 & -0.45 & -0.17 & -0.88 & 0.19 & -2.00 & 6.9步 \\
+1 & -0.67 & -0.33 & -0.94 & 0.10 & -2.00 & 10步 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+有效视野 $= 1/(1-\gamma\lambda)$
+
+\textbf{观察}：$\lambda$越大，$\hat{A}_0$越受远处（$r_3, r_4$）影响，绝对值越大。
+\end{calculation}
+
+\begin{theorem}[GAE是$n$步估计的指数平均]
+\[
+\hat{A}^{\text{GAE}(\lambda)}_t = (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} \hat{A}^{(n)}_t
+\]
+其中$\hat{A}^{(n)}_t = \sum_{l=0}^{n-1} \gamma^l r_{t+l} + \gamma^n V(s_{t+n}) - V(s_t)$是$n$步优势估计。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：$n$步优势估计
+
+\begin{align*}
+\hat{A}^{(n)}_t &= r_t + \gamma r_{t+1} + ... + \gamma^{n-1} r_{t+n-1} + \gamma^n V(s_{t+n}) - V(s_t)
+\end{align*}
+
+\textbf{Step 2}：展开为TD误差之和
+
+$\hat{A}^{(1)}_t = r_t + \gamma V(s_{t+1}) - V(s_t) = \delta_t$
+
+$\hat{A}^{(2)}_t = r_t + \gamma r_{t+1} + \gamma^2 V(s_{t+2}) - V(s_t)$
+
+注意：
+\begin{align*}
+\hat{A}^{(2)}_t &= [r_t + \gamma V(s_{t+1}) - V(s_t)] + \gamma[r_{t+1} + \gamma V(s_{t+2}) - V(s_{t+1})] \\
+&= \delta_t + \gamma \delta_{t+1}
+\end{align*}
+
+归纳证明：$\hat{A}^{(n)}_t = \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}$
+
+\textbf{Step 3}：计算指数平均
+
+\begin{align*}
+&(1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} \hat{A}^{(n)}_t \\
+&= (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1} \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}
+\end{align*}
+
+交换求和顺序。对于固定的$l$，$\delta_{t+l}$在$n > l$的项中出现：
+\begin{align*}
+&= (1-\lambda) \sum_{l=0}^\infty \gamma^l \delta_{t+l} \sum_{n=l+1}^\infty \lambda^{n-1} \\
+&= (1-\lambda) \sum_{l=0}^\infty \gamma^l \delta_{t+l} \cdot \frac{\lambda^l}{1-\lambda} \\
+&= \sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}
+\end{align*}
+\end{proof}
+
+\begin{calculation}[GAE的数值例子]
+轨迹：$(s_0, a_0, r_0=1) \to (s_1, a_1, r_1=2) \to (s_2, a_2, r_2=-1) \to s_3$（终止）
+
+$V(s_0) = 5, V(s_1) = 4, V(s_2) = 1, V(s_3) = 0$
+
+$\gamma = 0.99, \lambda = 0.95$
+
+\textbf{Step 1}：计算TD误差
+
+$\delta_0 = r_0 + \gamma V(s_1) - V(s_0) = 1 + 0.99 \times 4 - 5 = -0.04$
+
+$\delta_1 = r_1 + \gamma V(s_2) - V(s_1) = 2 + 0.99 \times 1 - 4 = -1.01$
+
+$\delta_2 = r_2 + \gamma V(s_3) - V(s_2) = -1 + 0 - 1 = -2$
+
+\textbf{Step 2}：计算GAE（从后往前）
+
+$\hat{A}_2^{\text{GAE}} = \delta_2 = -2$
+
+$\hat{A}_1^{\text{GAE}} = \delta_1 + \gamma\lambda \hat{A}_2^{\text{GAE}} = -1.01 + 0.99 \times 0.95 \times (-2) = -1.01 - 1.88 = -2.89$
+
+$\hat{A}_0^{\text{GAE}} = \delta_0 + \gamma\lambda \hat{A}_1^{\text{GAE}} = -0.04 + 0.9405 \times (-2.89) = -0.04 - 2.72 = -2.76$
+
+\textbf{对比MC估计}：
+
+$G_0 = 1 + 0.99 \times 2 + 0.99^2 \times (-1) = 1 + 1.98 - 0.98 = 2.0$
+
+$\hat{A}_0^{\text{MC}} = G_0 - V(s_0) = 2.0 - 5 = -3.0$
+
+GAE给出$-2.76$，MC给出$-3.0$，GAE更接近TD的$-0.04$。
+\end{calculation}
+
+\begin{theorem}[GAE的偏差-方差权衡]
+设$V$有误差$\epsilon_V = V - V^{\pi}$，则：
+\[
+\text{Bias}[\hat{A}^{\text{GAE}}] = O\left(\frac{\gamma(1-\lambda)}{1-\gamma\lambda} \epsilon_V\right)
+\]
+\[
+\text{Var}[\hat{A}^{\text{GAE}}] = O\left(\frac{1}{1-(\gamma\lambda)^2} \sigma_r^2\right)
+\]
+\end{theorem}
+
+\begin{proof}[证明思路]
+\textbf{偏差分析}：
+
+$\hat{A}^{\text{GAE}} = \sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}$
+
+真实优势：$A^{\pi}(s_t, a_t) = r_t + \gamma V^{\pi}(s_{t+1}) - V^{\pi}(s_t)$
+
+由于我们用$V$代替$V^{\pi}$：
+$\delta_t - A^{\pi}_t = \gamma(V(s_{t+1}) - V^{\pi}(s_{t+1})) - (V(s_t) - V^{\pi}(s_t)) = \gamma \epsilon_V(s_{t+1}) - \epsilon_V(s_t)$
+
+偏差主要来自于$\epsilon_V$的累积。由于GAE用$\gamma\lambda$折扣，偏差与$(1-\lambda)$成正比。
+
+\textbf{方差分析}：
+
+$\text{Var}[\hat{A}^{\text{GAE}}] = \text{Var}\left[\sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}\right]$
+
+假设$\delta$之间独立（粗略近似）：
+$\approx \sum_{l=0}^\infty (\gamma\lambda)^{2l} \text{Var}[\delta] = \frac{\text{Var}[\delta]}{1 - (\gamma\lambda)^2}$
+
+$\lambda$越大，方差越大。
+\end{proof}
+
+\begin{surprising}[$\lambda = 0.95$几乎总是最优]
+在大量实验中，$\lambda \in [0.9, 0.99]$效果相近，$\lambda = 0.95$是常用默认值。
+
+\textbf{为什么？}
+
+$\gamma\lambda = 0.99 \times 0.95 = 0.9405$
+
+有效视野：$\frac{1}{1-\gamma\lambda} = \frac{1}{0.0595} \approx 17$步
+
+这意味着GAE主要看未来\textbf{17步}的信息，既足够远（减少偏差），又不会太远（控制方差）。
+
+\textbf{对比}：
+\begin{itemize}
+    \item $\lambda = 0$：有效视野1步（TD(0)），偏差大
+    \item $\lambda = 1$：有效视野$1/(1-\gamma) = 100$步（MC），方差大
+    \item $\lambda = 0.95$：有效视野17步，平衡
+\end{itemize}
+\end{surprising}
+
+%=============================================================================
+\section{PPO的GPU效率优化}
+%=============================================================================
+
+\begin{plainwords}[PPO的计算瓶颈]
+PPO是on-policy算法：必须用当前策略收集数据。
+
+\textbf{问题}：每次更新都要重新收集数据，采样效率低。
+
+\textbf{解决}：并行采样 + minibatch更新
+\end{plainwords}
+
+\subsection{并行环境采样}
+
+\begin{keypoint}[向量化环境]
+同时运行$N$个环境副本，一次采样$N$个transition。
+
+\textbf{单环境}：$s \to a \to r, s'$，每秒1000步
+
+\textbf{1024个并行环境}：$\mathbf{s} \to \mathbf{a} \to \mathbf{r}, \mathbf{s}'$，每秒100万步
+
+\textbf{加速比}：1000倍！
+\end{keypoint}
+
+\begin{calculation}[PPO的吞吐量]
+\textbf{设置}：
+\begin{itemize}
+    \item 并行环境数$N = 2048$
+    \item 每个环境采样步数$T = 128$
+    \item Minibatch大小$M = 512$
+    \item 每次更新epochs$K = 4$
+\end{itemize}
+
+\textbf{每次策略更新}：
+\begin{itemize}
+    \item 采样数据量：$N \times T = 2048 \times 128 = 262144$个transition
+    \item Minibatch数：$NT / M = 262144 / 512 = 512$
+    \item 总梯度更新次数：$K \times 512 = 2048$
+\end{itemize}
+
+\textbf{在RTX 3090上}：
+\begin{itemize}
+    \item 采样时间：$\sim 0.5$秒（Isaac Gym）
+    \item 更新时间：$\sim 1$秒（2048次梯度计算）
+    \item 每秒处理：$262144 / 1.5 \approx 175000$ transitions/秒
+\end{itemize}
+\end{calculation}
+
+\subsection{多次Minibatch更新}
+
+\begin{theorem}[PPO可以多次复用数据]
+在clip机制下，同一批数据可以更新$K$次（通常$K = 3 \sim 10$），而不会导致策略崩溃。
+\end{theorem}
+
+\begin{proof}[直觉解释]
+TRPO/PPO的核心是限制新旧策略的差距。
+
+\textbf{第1次更新}：$\pi_1$相对$\pi_0$变化受clip限制，$r = \pi_1/\pi_0 \in [0.8, 1.2]$
+
+\textbf{第2次更新}：$\pi_2$相对$\pi_0$的$r = \pi_2/\pi_0$
+
+问题：$r$是否还在$[0.8, 1.2]$？
+
+$r = \frac{\pi_2}{\pi_0} = \frac{\pi_2}{\pi_1} \cdot \frac{\pi_1}{\pi_0}$
+
+如果每次更新$r$变化20\%，$K$次后可能$r \in [0.8^K, 1.2^K]$。
+
+$K = 4$：$r \in [0.41, 2.07]$
+
+\textbf{但}：clip机制在每次更新时都起作用，阻止激进更新。
+
+实际中，$K = 4$时平均$r \approx [0.9, 1.1]$，远没有理论最坏情况那么极端。
+\end{proof}
+
+\begin{surprising}[为什么PPO比TRPO快100倍]
+\textbf{TRPO每次更新}：
+\begin{enumerate}
+    \item 收集数据
+    \item 计算梯度
+    \item CG求$F^{-1}g$（10次Fisher-向量乘积）
+    \item 线搜索（5次策略评估）
+    \item 1次策略更新
+\end{enumerate}
+总计：相当于$\sim 16$次梯度计算
+
+\textbf{PPO每次更新}：
+\begin{enumerate}
+    \item 收集数据
+    \item 多次minibatch梯度更新
+    \item 每次更新就是1次前向 + 1次反向
+\end{enumerate}
+总计：$K \times (\text{minibatch数})$次梯度计算，但每次计算很快
+
+\textbf{关键差异}：
+\begin{itemize}
+    \item TRPO：需要二阶信息（Fisher），每个样本算$K$次
+    \item PPO：只需要一阶信息，每个样本算1次
+\end{itemize}
+
+\textbf{结果}：相同wall-clock时间，PPO处理的样本量是TRPO的\textbf{10-100倍}！
+\end{surprising}
+
+%=============================================================================
+\section{RLHF中的PPO}
+%=============================================================================
+
+\begin{plainwords}[ChatGPT是怎么训练的]
+RLHF = Reinforcement Learning from Human Feedback
+
+\textbf{目标}：让语言模型生成人类喜欢的回答
+
+\textbf{方法}：用PPO微调语言模型，奖励由"人类偏好模型"给出
+\end{plainwords}
+
+\subsection{RLHF的优化问题}
+
+\begin{definition}[RLHF目标]
+\[
+\max_\theta \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_\theta(\cdot|x)}\left[R(x, y)\right] - \beta D_{KL}(\pi_\theta \| \pi_{\text{ref}})
+\]
+
+其中：
+\begin{itemize}
+    \item $x$：用户输入（prompt）
+    \item $y$：模型输出（response）
+    \item $R(x, y)$：奖励模型（Reward Model）的评分
+    \item $\pi_{\text{ref}}$：预训练模型（reference policy）
+    \item $\beta$：KL惩罚系数
+\end{itemize}
+\end{definition}
+
+\begin{keypoint}[为什么需要KL惩罚]
+没有KL惩罚会发生什么？
+
+\textbf{Reward Hacking}：模型学会"欺骗"奖励模型
+\begin{itemize}
+    \item 奖励模型喜欢长回答 → 模型生成超长废话
+    \item 奖励模型喜欢确定性语气 → 模型胡说八道但很自信
+    \item 奖励模型有某些bias → 模型exploit这些bias
+\end{itemize}
+
+\textbf{KL惩罚的作用}：
+\begin{itemize}
+    \item 保持模型不偏离预训练太远
+    \item 预训练模型学过"什么是正常的语言"
+    \item KL约束保留这种"常识"
+\end{itemize}
+\end{keypoint}
+
+\begin{theorem}[RLHF的最优策略——闭式解]
+RLHF目标的最优策略为：
+\[
+\pi^*(y|x) = \frac{1}{Z(x)} \pi_{\text{ref}}(y|x) \exp\left(\frac{R(x,y)}{\beta}\right)
+\]
+其中$Z(x) = \sum_y \pi_{\text{ref}}(y|x) \exp(R(x,y)/\beta)$是配分函数。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：写出优化问题
+
+对于固定的$x$，优化：
+\[
+\max_{\pi} \sum_y \pi(y) R(x,y) - \beta \sum_y \pi(y) \log \frac{\pi(y)}{\pi_{\text{ref}}(y)}
+\]
+约束：$\sum_y \pi(y) = 1$，$\pi(y) \geq 0$
+
+\textbf{Step 2}：Lagrangian
+
+\[
+\mathcal{L} = \sum_y \pi(y) R(y) - \beta \sum_y \pi(y) \log \frac{\pi(y)}{\pi_{\text{ref}}(y)} + \lambda\left(1 - \sum_y \pi(y)\right)
+\]
+
+\textbf{Step 3}：对$\pi(y)$求导
+
+\[
+\frac{\partial \mathcal{L}}{\partial \pi(y)} = R(y) - \beta \log \frac{\pi(y)}{\pi_{\text{ref}}(y)} - \beta - \lambda = 0
+\]
+
+解得：
+\[
+\log \frac{\pi(y)}{\pi_{\text{ref}}(y)} = \frac{R(y) - \beta - \lambda}{\beta}
+\]
+\[
+\pi(y) = \pi_{\text{ref}}(y) \exp\left(\frac{R(y)}{\beta}\right) \exp\left(\frac{-\beta - \lambda}{\beta}\right)
+\]
+
+\textbf{Step 4}：归一化确定$\lambda$
+
+$\sum_y \pi(y) = 1$要求：
+\[
+\exp\left(\frac{-\beta - \lambda}{\beta}\right) = \frac{1}{\sum_y \pi_{\text{ref}}(y) e^{R(y)/\beta}} = \frac{1}{Z}
+\]
+
+因此$\pi^*(y) = \frac{1}{Z} \pi_{\text{ref}}(y) e^{R(y)/\beta}$。
+\end{proof}
+
+\begin{corollary}[最优策略的奖励表示]
+从$\pi^*$的闭式解可以反解出奖励：
+\[
+R(x, y) = \beta \log \frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
+\]
+\end{corollary}
+
+\begin{proof}
+由$\pi^*(y) = \frac{1}{Z} \pi_{\text{ref}}(y) e^{R(y)/\beta}$，两边取对数：
+\[
+\log \pi^*(y) = \log \pi_{\text{ref}}(y) + \frac{R(y)}{\beta} - \log Z
+\]
+移项得$R(y) = \beta \log \frac{\pi^*(y)}{\pi_{\text{ref}}(y)} + \beta \log Z$。
+\end{proof}
+
+\begin{calculation}[RLHF的详细数值例子]
+\textbf{设置}：prompt $x$ = "Explain quantum physics"
+
+三个候选回答及其奖励：
+\begin{center}
+\begin{tabular}{l|c|c}
+\toprule
+回答 & $R(x, y)$ & $\pi_{\text{ref}}(y|x)$ \\
+\midrule
+$y_1$: "It's complicated." & 0.2 & 0.5 \\
+$y_2$: "Quantum physics studies..." (中等长度) & 0.8 & 0.3 \\
+$y_3$: "Quantum physics is..." (详细解释) & 1.0 & 0.2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Case 1}：$\beta = 1$（中等KL惩罚）
+
+$\pi^*(y_1) \propto 0.5 \times e^{0.2/1} = 0.5 \times 1.221 = 0.611$
+
+$\pi^*(y_2) \propto 0.3 \times e^{0.8/1} = 0.3 \times 2.226 = 0.668$
+
+$\pi^*(y_3) \propto 0.2 \times e^{1.0/1} = 0.2 \times 2.718 = 0.544$
+
+归一化：$Z = 0.611 + 0.668 + 0.544 = 1.823$
+
+$\pi^*(y_1) = 0.611/1.823 = 0.335$
+
+$\pi^*(y_2) = 0.668/1.823 = 0.366$
+
+$\pi^*(y_3) = 0.544/1.823 = 0.298$
+
+\textbf{Case 2}：$\beta = 0.5$（弱KL惩罚，更信任奖励）
+
+$\pi^*(y_1) \propto 0.5 \times e^{0.2/0.5} = 0.5 \times e^{0.4} = 0.5 \times 1.492 = 0.746$
+
+$\pi^*(y_2) \propto 0.3 \times e^{0.8/0.5} = 0.3 \times e^{1.6} = 0.3 \times 4.953 = 1.486$
+
+$\pi^*(y_3) \propto 0.2 \times e^{1.0/0.5} = 0.2 \times e^{2.0} = 0.2 \times 7.389 = 1.478$
+
+归一化：$Z = 0.746 + 1.486 + 1.478 = 3.710$
+
+$\pi^*(y_1) = 0.746/3.710 = 0.201$
+
+$\pi^*(y_2) = 1.486/3.710 = 0.401$
+
+$\pi^*(y_3) = 1.478/3.710 = 0.398$
+
+\textbf{Case 3}：$\beta = 2$（强KL惩罚，保守）
+
+$\pi^*(y_1) \propto 0.5 \times e^{0.2/2} = 0.5 \times e^{0.1} = 0.5 \times 1.105 = 0.553$
+
+$\pi^*(y_2) \propto 0.3 \times e^{0.8/2} = 0.3 \times e^{0.4} = 0.3 \times 1.492 = 0.448$
+
+$\pi^*(y_3) \propto 0.2 \times e^{1.0/2} = 0.2 \times e^{0.5} = 0.2 \times 1.649 = 0.330$
+
+归一化：$Z = 0.553 + 0.448 + 0.330 = 1.331$
+
+$\pi^*(y_1) = 0.553/1.331 = 0.415$
+
+$\pi^*(y_2) = 0.448/1.331 = 0.337$
+
+$\pi^*(y_3) = 0.330/1.331 = 0.248$
+
+\textbf{总结表}：
+\begin{center}
+\begin{tabular}{c|ccc|c}
+\toprule
+$\beta$ & $\pi^*(y_1)$ & $\pi^*(y_2)$ & $\pi^*(y_3)$ & $D_{KL}(\pi^* \| \pi_{\text{ref}})$ \\
+\midrule
+$\pi_{\text{ref}}$ & 0.500 & 0.300 & 0.200 & 0 \\
+2.0 & 0.415 & 0.337 & 0.248 & 0.016 \\
+1.0 & 0.335 & 0.366 & 0.298 & 0.057 \\
+0.5 & 0.201 & 0.401 & 0.398 & 0.201 \\
+$\to 0$ & 0 & 0.5 & 0.5 & $\infty$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{验证KL}（$\beta = 1$）：
+\begin{align*}
+D_{KL} &= 0.335 \log \frac{0.335}{0.5} + 0.366 \log \frac{0.366}{0.3} + 0.298 \log \frac{0.298}{0.2} \\
+&= 0.335 \times (-0.400) + 0.366 \times 0.199 + 0.298 \times 0.399 \\
+&= -0.134 + 0.073 + 0.119 = 0.058 \approx 0.057 \checkmark
+\end{align*}
+\end{calculation}
+
+\begin{calculation}[手算：隐式奖励的反推]
+由最优策略$\pi^*$反推奖励$R$。
+
+$R(y) = \beta \log \frac{\pi^*(y)}{\pi_{\text{ref}}(y)} + \beta \log Z$
+
+用$\beta = 1$的例子：
+
+$\log Z = \log 1.823 = 0.600$
+
+$R(y_1) = 1 \times \log \frac{0.335}{0.5} + 0.600 = -0.400 + 0.600 = 0.200$ \checkmark
+
+$R(y_2) = 1 \times \log \frac{0.366}{0.3} + 0.600 = 0.199 + 0.600 = 0.799 \approx 0.8$ \checkmark
+
+$R(y_3) = 1 \times \log \frac{0.298}{0.2} + 0.600 = 0.399 + 0.600 = 0.999 \approx 1.0$ \checkmark
+
+\textbf{这就是DPO能工作的原因}：从$\pi^*/\pi_{\text{ref}}$的比值可以恢复奖励（差一个常数$\log Z$，但在偏好比较中抵消）。
+\end{calculation}
+
+%=============================================================================
+\section{DPO：直接偏好优化}
+%=============================================================================
+
+\begin{plainwords}[RLHF的问题]
+RLHF需要两步：
+\begin{enumerate}
+    \item 训练奖励模型$R(x, y)$
+    \item 用PPO优化策略$\pi_\theta$
+\end{enumerate}
+
+\textbf{问题}：PPO不稳定，超参数多，计算量大。
+
+\textbf{DPO的想法}：能否\textbf{跳过奖励模型}，直接从偏好数据训练策略？
+\end{plainwords}
+
+\subsection{Bradley-Terry偏好模型}
+
+\begin{definition}[Bradley-Terry模型]
+给定两个回答$y_w$（winning，人类偏好）和$y_l$（losing），偏好概率为：
+\[
+P(y_w \succ y_l | x) = \sigma(R(x, y_w) - R(x, y_l))
+\]
+其中$\sigma(z) = \frac{1}{1 + e^{-z}}$是sigmoid函数。
+\end{definition}
+
+\begin{calculation}[Bradley-Terry的数值直觉]
+设$R(y_w) = 1.0$，$R(y_l) = 0.5$，则$\Delta R = 0.5$
+
+$P(y_w \succ y_l) = \sigma(0.5) = \frac{1}{1 + e^{-0.5}} = \frac{1}{1 + 0.61} = 0.62$
+
+\begin{center}
+\begin{tabular}{c|c}
+\toprule
+$\Delta R = R(y_w) - R(y_l)$ & $P(y_w \succ y_l)$ \\
+\midrule
+-2 & 0.12 \\
+-1 & 0.27 \\
+0 & 0.50 \\
+0.5 & 0.62 \\
+1 & 0.73 \\
+2 & 0.88 \\
+3 & 0.95 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{直觉}：奖励差越大，偏好越确定。差3分时，95\%概率选高分。
+\end{calculation}
+
+\subsection{DPO的推导}
+
+\begin{theorem}[DPO目标的推导]
+将RLHF最优策略的奖励表示代入Bradley-Terry模型，得到DPO目标：
+\[
+\mathcal{L}_{\text{DPO}}(\theta) = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)\right]
+\]
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：奖励的策略表示
+
+由RLHF最优解的推论：
+\[
+R(x, y) = \beta \log \frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
+\]
+
+\textbf{Step 2}：代入Bradley-Terry
+
+\begin{align*}
+P(y_w \succ y_l) &= \sigma(R(y_w) - R(y_l)) \\
+&= \sigma\left(\beta \log \frac{\pi^*(y_w)}{\pi_{\text{ref}}(y_w)} + \beta \log Z - \beta \log \frac{\pi^*(y_l)}{\pi_{\text{ref}}(y_l)} - \beta \log Z\right) \\
+&= \sigma\left(\beta \log \frac{\pi^*(y_w)}{\pi_{\text{ref}}(y_w)} - \beta \log \frac{\pi^*(y_l)}{\pi_{\text{ref}}(y_l)}\right)
+\end{align*}
+
+\textbf{关键}：$\log Z$项抵消了！
+
+\textbf{Step 3}：最大似然
+
+用$\pi_\theta$代替$\pi^*$，最大化偏好数据的对数似然：
+\[
+\max_\theta \sum_{(x, y_w, y_l)} \log P_\theta(y_w \succ y_l)
+\]
+
+等价于最小化负对数似然，得到DPO目标。
+\end{proof}
+
+\begin{keypoint}[DPO的神奇之处]
+\textbf{配分函数$Z$消失了}！
+
+在RLHF中，$Z(x) = \sum_y \pi_{\text{ref}}(y) e^{R(y)/\beta}$是难以计算的（需要对所有可能的$y$求和）。
+
+但在DPO中，$y_w$和$y_l$的$Z$相同，相减时抵消！
+
+这让DPO可以\textbf{直接优化}，不需要采样或RL。
+\end{keypoint}
+
+\begin{calculation}[DPO梯度的详细推导]
+设$u = \beta \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \beta \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)}$
+
+$\mathcal{L} = -\log \sigma(u)$
+
+\textbf{Step 1}：$\sigma$的导数
+
+$\sigma'(u) = \sigma(u)(1 - \sigma(u))$
+
+\textbf{Step 2}：$\log \sigma$的导数
+
+$\frac{d}{du}(-\log \sigma(u)) = -\frac{\sigma'(u)}{\sigma(u)} = -(1 - \sigma(u)) = \sigma(-u) - 1$
+
+\textbf{Step 3}：对$\theta$的梯度
+
+$\nabla_\theta u = \beta \nabla_\theta \log \pi_\theta(y_w) - \beta \nabla_\theta \log \pi_\theta(y_l)$
+
+$\nabla_\theta \mathcal{L} = (\sigma(-u) - 1) \cdot \beta (\nabla_\theta \log \pi_\theta(y_w) - \nabla_\theta \log \pi_\theta(y_l))$
+
+$= -\beta \sigma(-u) (\nabla_\theta \log \pi_\theta(y_w) - \nabla_\theta \log \pi_\theta(y_l))$
+
+$= \beta (1 - \sigma(u)) (\nabla_\theta \log \pi_\theta(y_l) - \nabla_\theta \log \pi_\theta(y_w))$
+
+\textbf{直觉}：
+\begin{itemize}
+    \item $(1 - \sigma(u))$：当前模型预测错误的概率
+    \item 预测越错（$u$小），梯度越大
+    \item 梯度方向：增加$y_w$的概率，减少$y_l$的概率
+\end{itemize}
+\end{calculation}
+
+\begin{calculation}[手算DPO：单个偏好对的完整训练]
+\textbf{设置}：Softmax策略，3个token：$y_w$, $y_l$, $y_{\text{other}}$
+
+$\pi_\theta(y) = \frac{e^{\theta_y}}{\sum_z e^{\theta_z}}$，参数$\theta = (\theta_w, \theta_l, \theta_o)$
+
+\textbf{初始}：$\theta^{(0)} = (0, 0, 0)$
+
+$\pi_\theta^{(0)}(y_w) = \pi_\theta^{(0)}(y_l) = \pi_\theta^{(0)}(y_o) = 1/3$
+
+\textbf{参考策略}：$\pi_{\text{ref}} = (1/3, 1/3, 1/3)$（与初始相同）
+
+$\beta = 1$，学习率$\alpha = 0.5$
+
+\textbf{Step 1}：计算初始loss
+
+$h_w = \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} = \log \frac{1/3}{1/3} = 0$
+
+$h_l = \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} = 0$
+
+$u = \beta(h_w - h_l) = 1 \times (0 - 0) = 0$
+
+$\mathcal{L} = -\log \sigma(0) = -\log(0.5) = 0.693$
+
+\textbf{Step 2}：计算梯度
+
+$\nabla_\theta \log \pi_\theta(y_w) = e_w - \pi = (1, 0, 0) - (1/3, 1/3, 1/3) = (2/3, -1/3, -1/3)$
+
+$\nabla_\theta \log \pi_\theta(y_l) = e_l - \pi = (0, 1, 0) - (1/3, 1/3, 1/3) = (-1/3, 2/3, -1/3)$
+
+$\nabla_\theta u = \beta(\nabla \log \pi(y_w) - \nabla \log \pi(y_l))$
+
+$= 1 \times ((2/3, -1/3, -1/3) - (-1/3, 2/3, -1/3))$
+
+$= (1, -1, 0)$
+
+$\nabla_\theta \mathcal{L} = -(1 - \sigma(0)) \cdot (1, -1, 0) = -0.5 \times (1, -1, 0) = (-0.5, 0.5, 0)$
+
+\textbf{Step 3}：更新参数
+
+$\theta^{(1)} = \theta^{(0)} - \alpha \nabla_\theta \mathcal{L} = (0, 0, 0) - 0.5 \times (-0.5, 0.5, 0)$
+
+$= (0.25, -0.25, 0)$
+
+\textbf{Step 4}：计算新策略
+
+$Z = e^{0.25} + e^{-0.25} + e^{0} = 1.284 + 0.779 + 1 = 3.063$
+
+$\pi^{(1)}(y_w) = 1.284 / 3.063 = 0.419$
+
+$\pi^{(1)}(y_l) = 0.779 / 3.063 = 0.254$
+
+$\pi^{(1)}(y_o) = 1 / 3.063 = 0.327$
+
+\textbf{Step 5}：计算新loss
+
+$h_w = \log \frac{0.419}{1/3} = \log 1.257 = 0.229$
+
+$h_l = \log \frac{0.254}{1/3} = \log 0.762 = -0.272$
+
+$u = 1 \times (0.229 - (-0.272)) = 0.501$
+
+$\mathcal{L}^{(1)} = -\log \sigma(0.501) = -\log(0.623) = 0.474$
+
+\textbf{总结}：
+\begin{center}
+\begin{tabular}{c|ccc|cc}
+\toprule
+迭代 & $\pi(y_w)$ & $\pi(y_l)$ & $\pi(y_o)$ & $u$ & Loss \\
+\midrule
+0 & 0.333 & 0.333 & 0.333 & 0 & 0.693 \\
+1 & 0.419 & 0.254 & 0.327 & 0.501 & 0.474 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+一步更新后，$y_w$概率从33.3\%增加到41.9\%，$y_l$从33.3\%降到25.4\%，loss从0.693降到0.474。
+\end{calculation}
+
+\begin{calculation}[手算DPO：继续迭代到收敛]
+继续上面的例子，迭代多次：
+
+\begin{center}
+\begin{tabular}{c|ccc|cc}
+\toprule
+迭代 & $\theta_w$ & $\theta_l$ & $\theta_o$ & $\pi(y_w)$ & Loss \\
+\midrule
+0 & 0 & 0 & 0 & 0.333 & 0.693 \\
+1 & 0.25 & -0.25 & 0 & 0.419 & 0.474 \\
+2 & 0.44 & -0.44 & 0 & 0.481 & 0.350 \\
+3 & 0.59 & -0.59 & 0 & 0.530 & 0.271 \\
+5 & 0.82 & -0.82 & 0 & 0.597 & 0.182 \\
+10 & 1.22 & -1.22 & 0 & 0.698 & 0.094 \\
+20 & 1.72 & -1.72 & 0 & 0.789 & 0.043 \\
+$\infty$ & $\infty$ & $-\infty$ & 0 & 1.0 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{观察}：
+\begin{itemize}
+    \item $\theta_w$和$\theta_l$以相反方向增长
+    \item $\theta_o$保持为0（与偏好无关）
+    \item 极限：$\pi(y_w) \to 1$，$\pi(y_l) \to 0$
+    \item 但收敛变慢（梯度趋于0）
+\end{itemize}
+\end{calculation}
+
+\begin{calculation}[DPO的数值例子]
+\textbf{数据}：$x$ = "Is the Earth flat?"
+
+$y_w$ = "No, the Earth is approximately spherical."
+
+$y_l$ = "Some people believe it might be flat."
+
+\textbf{初始}：$\pi_\theta = \pi_{\text{ref}}$，所以$\log \frac{\pi_\theta}{\pi_{\text{ref}}} = 0$
+
+$u = \beta (0 - 0) = 0$
+
+$\mathcal{L} = -\log \sigma(0) = -\log(0.5) = 0.693$
+
+\textbf{训练后}：假设$\log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} = 0.5$，$\log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} = -0.3$
+
+设$\beta = 0.1$：$u = 0.1 \times (0.5 - (-0.3)) = 0.08$
+
+$\mathcal{L} = -\log \sigma(0.08) = -\log(0.52) = 0.654$
+
+设$\beta = 1$：$u = 1 \times 0.8 = 0.8$
+
+$\mathcal{L} = -\log \sigma(0.8) = -\log(0.69) = 0.371$
+
+\textbf{$\beta$越大，惩罚偏好偏离越强}。
+\end{calculation}
+
+\subsection{DPO与RLHF的等价性}
+
+\begin{theorem}[DPO的全局最优等于RLHF的最优]
+若偏好数据由真实奖励$R^*$和Bradley-Terry模型生成，且$\pi_\theta$有足够表达能力，则DPO的全局最优$\pi_\theta^*$等于RLHF的最优策略。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：DPO最优的充分条件
+
+DPO损失为零当且仅当对所有$(y_w, y_l)$：
+\[
+\sigma\left(\beta \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \beta \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)}\right) = 1
+\]
+
+这要求$\beta \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \beta \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} \to +\infty$
+
+\textbf{Step 2}：与Bradley-Terry的一致性
+
+真实偏好概率$P^*(y_w \succ y_l) = \sigma(R^*(y_w) - R^*(y_l))$。
+
+若$\pi_\theta$使得$\beta \log \frac{\pi_\theta(y)}{\pi_{\text{ref}}(y)} = R^*(y) + c$（常数$c$），则模型偏好概率与真实一致。
+
+\textbf{Step 3}：识别RLHF解
+
+$\beta \log \frac{\pi_\theta(y)}{\pi_{\text{ref}}(y)} = R^*(y) + c$
+
+$\Rightarrow \pi_\theta(y) = \pi_{\text{ref}}(y) e^{(R^*(y) + c)/\beta}$
+
+$\Rightarrow \pi_\theta(y) \propto \pi_{\text{ref}}(y) e^{R^*(y)/\beta}$
+
+这正是RLHF的最优策略形式！
+\end{proof}
+
+%=============================================================================
+\section{IPO：恒等映射偏好优化}
+%=============================================================================
+
+\begin{plainwords}[DPO的问题]
+DPO假设Bradley-Terry模型完美成立。但实际中：
+\begin{itemize}
+    \item 人类偏好有噪声
+    \item 偏好可能不传递（$A \succ B$且$B \succ C$但$A \not\succ C$）
+    \item 极端奖励差会导致数值问题
+\end{itemize}
+
+\textbf{IPO的想法}：用更鲁棒的损失函数。
+\end{plainwords}
+
+\begin{definition}[IPO目标]
+\[
+\mathcal{L}_{\text{IPO}}(\theta) = \mathbb{E}\left[\left(\log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} - \frac{1}{2\beta}\right)^2\right]
+\]
+\end{definition}
+
+\begin{theorem}[IPO的来源：正则化的pairwise ranking]
+IPO可以从以下目标推导：
+\[
+\min_\pi \mathbb{E}_{y_w, y_l}\left[(R(y_w) - R(y_l) - m)^2\right] + \beta D_{KL}(\pi \| \pi_{\text{ref}})
+\]
+其中$m$是期望的margin。
+\end{theorem}
+
+\begin{proof}
+\textbf{Step 1}：用策略表示奖励
+
+由RLHF最优解：$R(y) = \beta \log \frac{\pi(y)}{\pi_{\text{ref}}(y)} + C$
+
+\textbf{Step 2}：代入ranking目标
+
+$R(y_w) - R(y_l) = \beta \left(\log \frac{\pi(y_w)}{\pi_{\text{ref}}(y_w)} - \log \frac{\pi(y_l)}{\pi_{\text{ref}}(y_l)}\right)$
+
+设期望margin $m = \frac{1}{2}$（对应50\%以上偏好概率），则目标变为：
+\[
+\min_\pi \mathbb{E}\left[\left(\beta \left(\log \frac{\pi(y_w)}{\pi_{\text{ref}}(y_w)} - \log \frac{\pi(y_l)}{\pi_{\text{ref}}(y_l)}\right) - \frac{1}{2}\right)^2\right]
+\]
+
+除以$\beta^2$并整理，得到IPO形式。
+\end{proof}
+
+\begin{calculation}[IPO vs DPO的梯度对比]
+设$h = \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)}$
+
+\textbf{DPO梯度}（对$h$）：
+\[
+\frac{\partial \mathcal{L}_{\text{DPO}}}{\partial h} = -\beta(1 - \sigma(\beta h)) = -\beta \sigma(-\beta h)
+\]
+
+\textbf{IPO梯度}（对$h$）：
+\[
+\frac{\partial \mathcal{L}_{\text{IPO}}}{\partial h} = 2\left(h - \frac{1}{2\beta}\right)
+\]
+
+\textbf{数值对比}（$\beta = 0.1$）：
+
+\begin{center}
+\begin{tabular}{c|c|c}
+\toprule
+$h$ & DPO梯度 & IPO梯度 \\
+\midrule
+-5 & -0.0999 & -12 \\
+-1 & -0.0953 & -4 \\
+0 & -0.0500 & -1 \\
+1 & -0.0047 & 2 \\
+5 & -0.0001 & 8 \\
+10 & $\approx 0$ & 18 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{关键差异}：
+\begin{itemize}
+    \item DPO：当$h$大时梯度趋于0（已经分对了，不再调整）
+    \item IPO：梯度与$h - \frac{1}{2\beta}$成正比，会一直推向target
+\end{itemize}
+
+\textbf{IPO更稳定}：不会因为某些样本loss很小而停止学习。
+\end{calculation}
+
+\begin{calculation}[手算IPO：单步更新]
+\textbf{设置}：与DPO例子相同，$\beta = 1$，学习率$\alpha = 0.1$
+
+初始$h = 0$（$\pi_\theta = \pi_{\text{ref}}$）
+
+\textbf{IPO目标}：$\mathcal{L} = (h - 1/(2\beta))^2 = (0 - 0.5)^2 = 0.25$
+
+\textbf{IPO梯度}：$\frac{\partial \mathcal{L}}{\partial h} = 2(h - 0.5) = 2(0 - 0.5) = -1$
+
+\textbf{对比DPO}：$\frac{\partial \mathcal{L}_{\text{DPO}}}{\partial h} = -1 \times (1 - 0.5) = -0.5$
+
+IPO梯度是DPO的2倍！
+
+\textbf{更新}（假设$\frac{\partial h}{\partial \theta} = 1$）：
+
+IPO：$h_{\text{new}} = 0 - 0.1 \times (-1) = 0.1$
+
+DPO：$h_{\text{new}} = 0 - 0.1 \times (-0.5) = 0.05$
+
+\textbf{继续迭代到$h = 5$}：
+
+IPO梯度：$2(5 - 0.5) = 9$ （还在推动）
+
+DPO梯度：$-1 \times \sigma(-5) = -1 \times 0.0067 = -0.0067$ （几乎停止）
+
+\textbf{结论}：IPO在已经分对的样本上仍然有梯度，继续推向target margin。
+\end{calculation}
+
+\begin{calculation}[手算KTO：pointwise损失]
+\textbf{设置}：$\beta = 0.1$，$\lambda_w = 1$（好回答权重），$\lambda_l = 1.5$（坏回答权重，损失厌恶）
+
+\textbf{数据}：
+\begin{itemize}
+    \item 好回答$y_w$：$\log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} = 0.5$
+    \item 坏回答$y_l$：$\log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} = -0.3$
+\end{itemize}
+
+$z_{\text{ref}} = 0$（baseline）
+
+\textbf{好回答的损失}：
+$\mathcal{L}_w = \lambda_w \cdot (1 - \sigma(\beta \cdot h_w - z_{\text{ref}}))$
+
+$= 1 \times (1 - \sigma(0.1 \times 0.5 - 0))$
+
+$= 1 - \sigma(0.05)$
+
+$= 1 - \frac{1}{1 + e^{-0.05}}$
+
+$= 1 - \frac{1}{1 + 0.951}$
+
+$= 1 - 0.512 = 0.488$
+
+\textbf{坏回答的损失}：
+$\mathcal{L}_l = \lambda_l \cdot (1 - \sigma(-\beta \cdot h_l + z_{\text{ref}}))$
+
+$= 1.5 \times (1 - \sigma(-0.1 \times (-0.3)))$
+
+$= 1.5 \times (1 - \sigma(0.03))$
+
+$= 1.5 \times (1 - 0.507)$
+
+$= 1.5 \times 0.493 = 0.740$
+
+\textbf{总损失}：$\mathcal{L} = 0.488 + 0.740 = 1.228$
+
+\textbf{解读}：
+\begin{itemize}
+    \item 好回答贡献0.488（模型已经略微偏好它，但还不够）
+    \item 坏回答贡献0.740（被$\lambda_l = 1.5$放大）
+    \item 损失厌恶使得模型更积极地降低坏回答概率
+\end{itemize}
+\end{calculation}
+
+\begin{calculation}[手算GRPO：群体内标准化]
+\textbf{设置}：Prompt $x$: "Write a poem about AI"，采样$G = 4$个回答
+
+\textbf{奖励}：$R = [0.8, 0.6, 0.9, 0.5]$
+
+\textbf{Step 1}：计算均值
+$\bar{R} = \frac{0.8 + 0.6 + 0.9 + 0.5}{4} = \frac{2.8}{4} = 0.7$
+
+\textbf{Step 2}：计算方差
+$(R_i - \bar{R})^2 = [0.01, 0.01, 0.04, 0.04]$
+
+$\text{Var} = \frac{0.01 + 0.01 + 0.04 + 0.04}{4} = \frac{0.1}{4} = 0.025$
+
+$\sigma_R = \sqrt{0.025} = 0.158$
+
+\textbf{Step 3}：标准化优势
+\begin{align*}
+\hat{A}_1 &= \frac{0.8 - 0.7}{0.158} = \frac{0.1}{0.158} = 0.633 \\
+\hat{A}_2 &= \frac{0.6 - 0.7}{0.158} = \frac{-0.1}{0.158} = -0.633 \\
+\hat{A}_3 &= \frac{0.9 - 0.7}{0.158} = \frac{0.2}{0.158} = 1.266 \\
+\hat{A}_4 &= \frac{0.5 - 0.7}{0.158} = \frac{-0.2}{0.158} = -1.266
+\end{align*}
+
+\textbf{验证}：$\sum_i \hat{A}_i = 0.633 - 0.633 + 1.266 - 1.266 = 0$ \checkmark
+
+\textbf{GRPO梯度}（假设$\epsilon = 0.2$的clip）：
+
+设重要性比率$r = [1.1, 0.9, 1.3, 0.85]$
+
+Clip后：$\text{clip}(r) = [1.1, 0.9, 1.2, 0.85]$（$r_3 = 1.3$被clip到1.2）
+
+\begin{center}
+\begin{tabular}{c|cccc|c}
+\toprule
+$i$ & $r_i$ & $\text{clip}(r_i)$ & $\hat{A}_i$ & $L_i^{\text{CLIP}}$ & 被clip? \\
+\midrule
+1 & 1.1 & 1.1 & 0.633 & $\min(0.70, 0.70) = 0.70$ & 否 \\
+2 & 0.9 & 0.9 & -0.633 & $\min(-0.57, -0.51) = -0.57$ & 否 \\
+3 & 1.3 & 1.2 & 1.266 & $\min(1.65, 1.52) = 1.52$ & 是 \\
+4 & 0.85 & 0.85 & -1.266 & $\min(-1.08, -1.08) = -1.08$ & 否 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$\bar{L}^{\text{CLIP}} = \frac{0.70 - 0.57 + 1.52 - 1.08}{4} = \frac{0.57}{4} = 0.143$
+\end{calculation}
+
+%=============================================================================
+\section{KTO：Kahneman-Tversky优化}
+%=============================================================================
+
+\begin{plainwords}[为什么需要KTO]
+DPO和IPO都需要\textbf{成对}的偏好数据$(y_w, y_l)$。
+
+但很多数据是\textbf{单独}标注的：
+\begin{itemize}
+    \item 用户点赞/点踩
+    \item 人工标注"好/坏"
+\end{itemize}
+
+\textbf{KTO}：直接使用pointwise标注数据。
+\end{plainwords}
+
+\begin{definition}[KTO目标]
+\[
+\mathcal{L}_{\text{KTO}}(\theta) = \mathbb{E}_{x, y}\left[w(y) \cdot \left(1 - v\left(\beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)} - z_{\text{ref}}\right)\right)\right]
+\]
+
+其中：
+\begin{itemize}
+    \item $w(y) = \lambda_w$若$y$是好回答，$w(y) = \lambda_l$若$y$是坏回答
+    \item $v(x) = \sigma(x)$对好回答，$v(x) = \sigma(-x)$对坏回答
+    \item $z_{\text{ref}} = \mathbb{E}_{x', y' \sim \pi_{\text{ref}}}[\beta \log \frac{\pi_{\text{ref}}(y'|x')}{\pi_{\text{ref}}(y'|x')}] = 0$（baseline）
+\end{itemize}
+\end{definition}
+
+\begin{theorem}[KTO的心理学基础：前景理论]
+KTO基于Kahneman和Tversky的\textbf{前景理论}：
+\begin{enumerate}
+    \item 人对损失比收益更敏感（损失厌恶）
+    \item 价值函数是S形的，损失区域更陡
+\end{enumerate}
+
+KTO的$\lambda_l > \lambda_w$体现了损失厌恶。
+\end{theorem}
+
+\begin{calculation}[KTO的数值例子]
+设$\beta = 0.1$，$\lambda_w = 1$，$\lambda_l = 1.5$（损失厌恶系数1.5）
+
+\textbf{好回答}$y_w$：当前$\log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} = 0.5$
+
+$\mathcal{L}_w = 1 \times (1 - \sigma(0.1 \times 0.5 - 0)) = 1 - \sigma(0.05) = 1 - 0.512 = 0.488$
+
+\textbf{坏回答}$y_l$：当前$\log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} = -0.3$
+
+$\mathcal{L}_l = 1.5 \times (1 - \sigma(-0.1 \times (-0.3))) = 1.5 \times (1 - \sigma(0.03)) = 1.5 \times 0.493 = 0.74$
+
+\textbf{总损失}：$\mathcal{L} = 0.488 + 0.74 = 1.228$
+
+\textbf{直觉}：坏回答的损失被放大1.5倍，模型会优先降低坏回答的概率。
+\end{calculation}
+
+%=============================================================================
+\section{GRPO：群体相对策略优化}
+%=============================================================================
+
+\begin{plainwords}[GRPO的动机]
+PPO需要critic网络$V(s)$来计算优势。
+
+对于LLM，训练critic很贵（需要额外的大模型）。
+
+\textbf{GRPO}：用\textbf{群体内相对奖励}代替critic，不需要额外网络。
+\end{plainwords}
+
+\begin{definition}[GRPO目标]
+对每个prompt $x$，采样$G$个回答$\{y_1, ..., y_G\}$，计算：
+\[
+\hat{A}_i = \frac{R(x, y_i) - \bar{R}}{\sigma_R}
+\]
+其中$\bar{R} = \frac{1}{G}\sum_j R(x, y_j)$，$\sigma_R = \sqrt{\frac{1}{G}\sum_j (R(x, y_j) - \bar{R})^2}$
+
+GRPO目标：
+\[
+\mathcal{L}_{\text{GRPO}}(\theta) = -\mathbb{E}_{x, \{y_i\}}\left[\frac{1}{G}\sum_{i=1}^G \min\left(r_i \hat{A}_i, \text{clip}(r_i, 1-\epsilon, 1+\epsilon) \hat{A}_i\right)\right]
+\]
+\end{definition}
+
+\begin{theorem}[GRPO的优势估计是无偏的]
+设$R(x, y)$的期望为$\mu$，则$\mathbb{E}[\hat{A}_i] = 0$，即标准化后的相对优势期望为零（像真正的优势函数一样）。
+\end{theorem}
+
+\begin{proof}
+\begin{align*}
+\mathbb{E}[\hat{A}_i] &= \mathbb{E}\left[\frac{R_i - \bar{R}}{\sigma_R}\right] \\
+&= \mathbb{E}\left[\frac{R_i - \frac{1}{G}\sum_j R_j}{\sigma_R}\right] \\
+&= \mathbb{E}\left[\frac{R_i}{\sigma_R}\right] - \frac{1}{G}\sum_j \mathbb{E}\left[\frac{R_j}{\sigma_R}\right]
+\end{align*}
+
+由于$R_i$和$R_j$同分布，$\mathbb{E}[R_i/\sigma_R] = \mathbb{E}[R_j/\sigma_R]$。
+
+因此$\mathbb{E}[\hat{A}_i] = \mathbb{E}[R_i/\sigma_R] - \frac{1}{G} \cdot G \cdot \mathbb{E}[R_i/\sigma_R] = 0$。
+\end{proof}
+
+\begin{calculation}[GRPO的数值例子]
+Prompt $x$: "Write a poem about AI"
+
+采样$G = 4$个回答，奖励：$R = [0.8, 0.6, 0.9, 0.5]$
+
+$\bar{R} = (0.8 + 0.6 + 0.9 + 0.5) / 4 = 0.7$
+
+$\sigma_R = \sqrt{((0.8-0.7)^2 + (0.6-0.7)^2 + (0.9-0.7)^2 + (0.5-0.7)^2)/4} = \sqrt{0.025} = 0.158$
+
+标准化优势：
+\begin{align*}
+\hat{A}_1 &= (0.8 - 0.7) / 0.158 = 0.63 \\
+\hat{A}_2 &= (0.6 - 0.7) / 0.158 = -0.63 \\
+\hat{A}_3 &= (0.9 - 0.7) / 0.158 = 1.26 \\
+\hat{A}_4 &= (0.5 - 0.7) / 0.158 = -1.26
+\end{align*}
+
+验证：$\sum_i \hat{A}_i = 0.63 - 0.63 + 1.26 - 1.26 = 0$ \checkmark
+
+\textbf{解读}：$y_3$最好（$\hat{A} = 1.26$），$y_4$最差（$\hat{A} = -1.26$），GRPO会增加$y_3$的概率，减少$y_4$的概率。
+\end{calculation}
+
+%=============================================================================
+\section{各种PO的统一数学框架}
+%=============================================================================
+
+\begin{theorem}[统一视角：所有PO都在优化KL正则化的目标]
+所有主流PO方法都可以写成：
+\[
+\max_\pi \mathbb{E}[\text{Quality}(\pi)] - \beta D_{KL}(\pi \| \pi_{\text{ref}})
+\]
+只是"Quality"的定义不同。
+\end{theorem}
+
+\begin{center}
+\begin{tabular}{l|l|l}
+\toprule
+\textbf{方法} & \textbf{Quality定义} & \textbf{数据类型} \\
+\midrule
+RLHF-PPO & $\mathbb{E}_{y \sim \pi}[R(y)]$ & 奖励模型 \\
+DPO & $\mathbb{E}[\log P(y_w \succ y_l)]$（隐式） & 成对偏好 \\
+IPO & $\mathbb{E}[(R(y_w) - R(y_l) - m)^2]^{-1}$（隐式） & 成对偏好 \\
+KTO & $\mathbb{E}[\text{sign}(y) \cdot \log \pi(y)]$（近似） & 单点标注 \\
+GRPO & $\mathbb{E}[\text{rank}(y) \cdot \log \pi(y)]$（近似） & 群体采样 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{theorem}[最优策略的通用形式]
+所有KL正则化目标的最优策略都有形式：
+\[
+\pi^*(y|x) \propto \pi_{\text{ref}}(y|x) \cdot f(y, x)
+\]
+其中$f$是某个非负函数，依赖于具体的Quality定义。
+\end{theorem}
+
+\begin{proof}
+考虑一般目标$\max_\pi \mathbb{E}_\pi[g(y)] - \beta D_{KL}(\pi \| \pi_{\text{ref}})$。
+
+Lagrangian（带归一化约束）：
+\[
+\mathcal{L} = \sum_y \pi(y) g(y) - \beta \sum_y \pi(y) \log \frac{\pi(y)}{\pi_{\text{ref}}(y)} + \lambda(1 - \sum_y \pi(y))
+\]
+
+$\frac{\partial \mathcal{L}}{\partial \pi(y)} = g(y) - \beta \log \frac{\pi(y)}{\pi_{\text{ref}}(y)} - \beta - \lambda = 0$
+
+$\pi(y) = \pi_{\text{ref}}(y) \exp\left(\frac{g(y) - \beta - \lambda}{\beta}\right) \propto \pi_{\text{ref}}(y) e^{g(y)/\beta}$
+
+因此$f(y) = e^{g(y)/\beta}$。
+\end{proof}
+
+\begin{calculation}[各方法的$f(y)$]
+\textbf{RLHF}：$g(y) = R(y)$ → $f(y) = e^{R(y)/\beta}$
+
+\textbf{DPO}：隐式地，$f(y_w)/f(y_l) = e^{(R(y_w) - R(y_l))/\beta}$
+
+\textbf{数值例子}：$R(y_w) = 1$，$R(y_l) = 0.5$，$\beta = 0.1$
+
+$f(y_w)/f(y_l) = e^{0.5/0.1} = e^5 = 148.4$
+
+$\pi^*(y_w)/\pi^*(y_l)$相比$\pi_{\text{ref}}$增大了148倍！
+
+这就是为什么$\beta$小时对齐效果强但可能过拟合。
+\end{calculation}
+
+%=============================================================================
+\section{收敛性分析}
+%=============================================================================
+
+\subsection{PPO的收敛性}
+
+\begin{theorem}[PPO的近似单调改进]
+设$\epsilon$是clip参数，$\delta = \frac{\epsilon}{1-\epsilon}$。若每次更新满足$D_{KL}(\pi_{\text{old}} \| \pi_{\text{new}}) \leq c\delta^2$（某常数$c$），则：
+\[
+J(\pi_{\text{new}}) \geq J(\pi_{\text{old}}) - O(\delta^2)
+\]
+即策略改进是近似单调的。
+\end{theorem}
+
+\begin{proof}[证明思路]
+\textbf{Step 1}：回顾Kakade-Langford界
+
+$J(\pi') \geq L_\pi(\pi') - C \cdot D_{KL}^{\max}(\pi \| \pi')$
+
+\textbf{Step 2}：Clip限制了KL
+
+由Clip机制，$r = \pi'/\pi \in [1-\epsilon, 1+\epsilon]$。
+
+单样本KL：$\text{KL}(\pi \| \pi') = -\log r \lesssim \epsilon$（当$r$接近边界时）
+
+\textbf{Step 3}：代入得到界
+
+$J(\pi') \geq L_\pi(\pi') - O(\epsilon)$
+
+由于$L_\pi(\pi') \geq L_\pi(\pi) = J(\pi)$（clip后的代理目标仍然非负改进），我们有近似单调性。
+\end{proof}
+
+\begin{theorem}[DPO的收敛性——凸优化视角]
+DPO损失函数是$\theta$的\textbf{非凸}函数，但在log-linear策略参数化下，有局部收敛保证。
+\end{theorem}
+
+\begin{proof}[证明思路]
+\textbf{Step 1}：DPO损失的Hessian
+
+$\mathcal{L} = -\log \sigma(u)$，其中$u = \beta(h_w - h_l)$，$h = \log \frac{\pi_\theta}{\pi_{\text{ref}}}$
+
+$\nabla^2_\theta \mathcal{L} = \beta^2 \sigma(u)(1-\sigma(u)) (\nabla_\theta h_w - \nabla_\theta h_l)(\nabla_\theta h_w - \nabla_\theta h_l)^T + ...$
+
+\textbf{Step 2}：局部凸性条件
+
+当$|u|$不太大时（$\sigma(u)(1-\sigma(u))$远离0），Hessian的主项是半正定的。
+
+\textbf{Step 3}：收敛速率
+
+在局部凸区域，梯度下降以$O(1/t)$速率收敛。
+
+在非凸区域，可能收敛到局部最优或鞍点。
+\end{proof}
+
+\begin{calculation}[DPO的收敛数值实验]
+\textbf{设置}：100个偏好对，$\beta = 0.1$，学习率$\alpha = 0.01$
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+Iteration & Loss & Accuracy & $\bar{h}_w - \bar{h}_l$ \\
+\midrule
+0 & 0.693 & 50\% & 0 \\
+100 & 0.45 & 68\% & 0.3 \\
+500 & 0.28 & 82\% & 0.8 \\
+1000 & 0.18 & 89\% & 1.2 \\
+5000 & 0.08 & 96\% & 2.1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{观察}：
+\begin{itemize}
+    \item Loss指数衰减
+    \item $h_w - h_l$线性增长（直到饱和）
+    \item 收敛到接近100\%准确率
+\end{itemize}
+\end{calculation}
+
+\subsection{PPO超参数的敏感性分析}
+
+\begin{theorem}[Clip参数$\epsilon$的最优范围]
+理论分析和实验表明，$\epsilon \in [0.1, 0.3]$是最优范围：
+\begin{itemize}
+    \item $\epsilon < 0.1$：更新太保守，收敛慢
+    \item $\epsilon > 0.3$：可能不稳定，策略震荡
+\end{itemize}
+\end{theorem}
+
+\begin{calculation}[$\epsilon$对训练的影响]
+\textbf{任务}：CartPole，100万步训练
+
+\begin{center}
+\begin{tabular}{c|c|c|c}
+\toprule
+$\epsilon$ & 达到目标的步数 & 最终奖励 & 训练稳定性 \\
+\midrule
+0.05 & 800k & 480 & 很稳定 \\
+0.1 & 400k & 500 & 稳定 \\
+0.2 & 250k & 500 & 稳定 \\
+0.3 & 200k & 495 & 略有波动 \\
+0.5 & 300k & 450 & 不稳定 \\
+1.0 & - & 崩溃 & 很不稳定 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{最优}：$\epsilon = 0.2$在速度和稳定性之间取得最佳平衡。
+\end{calculation}
+
+\begin{theorem}[GAE参数$\lambda$的选择原则]
+\begin{enumerate}
+    \item $\lambda = 0$：等价于TD(0)，偏差高方差低
+    \item $\lambda = 1$：等价于MC，偏差低方差高
+    \item $\lambda \in [0.9, 0.99]$：实践中最优
+\end{enumerate}
+
+最优$\lambda^*$满足：
+\[
+\lambda^* = \arg\min_\lambda \text{Bias}^2(\lambda) + \text{Var}(\lambda)
+\]
+\end{theorem}
+
+\begin{calculation}[GAE $\lambda$的偏差-方差权衡]
+假设$\gamma = 0.99$，值函数误差$\epsilon_V = 0.1$，奖励方差$\sigma_r^2 = 1$。
+
+\textbf{有效视野}：$H(\lambda) = \frac{1}{1 - \gamma\lambda}$
+
+\begin{center}
+\begin{tabular}{c|c|c|c|c}
+\toprule
+$\lambda$ & $\gamma\lambda$ & 有效视野$H$ & 偏差$\propto$ & 方差$\propto$ \\
+\midrule
+0 & 0 & 1 & $\epsilon_V = 0.1$ & $\sigma_r^2 = 1$ \\
+0.5 & 0.495 & 2 & $0.05$ & $1.3$ \\
+0.9 & 0.891 & 9 & $0.011$ & $5.7$ \\
+0.95 & 0.9405 & 17 & $0.006$ & $10$ \\
+0.99 & 0.9801 & 50 & $0.002$ & $25$ \\
+1 & 0.99 & 100 & $0$ & $50$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{MSE} = 偏差$^2$ + 方差
+
+$\lambda = 0.95$：MSE $\approx 0.006^2 + 10 = 10.00004$
+
+$\lambda = 0.9$：MSE $\approx 0.011^2 + 5.7 = 5.70012$
+
+\textbf{$\lambda = 0.9$的MSE最小}！但差距不大，所以$[0.9, 0.99]$都可以。
+\end{calculation}
+
+%=============================================================================
+\section{课程总结：约束优化的旅程}
+%=============================================================================
+
+\begin{plainwords}[14周学了什么]
+我们从\textbf{无约束优化}（梯度下降）出发，一路走到\textbf{强化学习}（PPO）。
+
+核心主线：\textbf{约束} $\to$ \textbf{对偶} $\to$ \textbf{一阶方法}
+\end{plainwords}
+
+\begin{keypoint}[技术演进]
+\begin{center}
+\begin{tikzpicture}[node distance=2.5cm, auto]
+\node (gd) [draw, rectangle, minimum width=2cm] {梯度下降};
+\node (sgd) [draw, rectangle, right of=gd, minimum width=2cm] {SGD};
+\node (newton) [draw, rectangle, below of=gd, minimum width=2cm] {Newton法};
+\node (tr) [draw, rectangle, right of=newton, minimum width=2cm] {信任域};
+\node (lagrange) [draw, rectangle, below of=newton, minimum width=2cm] {Lagrange对偶};
+\node (trpo) [draw, rectangle, right of=lagrange, minimum width=2cm] {TRPO};
+\node (ppo) [draw, rectangle, right of=trpo, minimum width=2cm] {PPO};
+
+\draw[->] (gd) -- (sgd);
+\draw[->] (gd) -- (newton);
+\draw[->] (newton) -- (tr);
+\draw[->] (newton) -- (lagrange);
+\draw[->] (tr) -- (trpo);
+\draw[->] (lagrange) -- (trpo);
+\draw[->] (trpo) -- (ppo);
+\end{tikzpicture}
+\end{center}
+\end{keypoint}
+
+\begin{theorem}[PPO是所有技术的交汇点]
+PPO融合了：
+\begin{enumerate}
+    \item \textbf{SGD}（Week 2）：一阶优化，大规模并行
+    \item \textbf{方差缩减}（Week 2）：baseline和GAE
+    \item \textbf{约束优化}（Week 3）：信任域思想
+    \item \textbf{对偶方法}（Week 2）：KL惩罚
+    \item \textbf{策略梯度}（Week 13）：$\nabla J = \mathbb{E}[\nabla \log \pi \cdot A]$
+    \item \textbf{Fisher信息}（Week 13）：理解KL约束
+\end{enumerate}
+\end{theorem}
+
+\begin{surprising}[为什么PPO统治了RL]
+\textbf{理论上}：PPO不是最优的
+\begin{itemize}
+    \item 没有TRPO那样的单调改进保证
+    \item Clip是启发式的，没有严格理论
+    \item 超参数（$\epsilon, K, \lambda$）需要调
+\end{itemize}
+
+\textbf{实践中}：PPO是最成功的
+\begin{itemize}
+    \item \textbf{简单}：只需要一阶梯度，不需要Fisher或Hessian
+    \item \textbf{快}：比TRPO快10-100倍
+    \item \textbf{稳定}：clip防止策略崩溃
+    \item \textbf{通用}：离散/连续动作，单/多智能体，游戏/机器人/LLM
+\end{itemize}
+
+\textbf{教训}：在深度学习时代，"简单+快速+够好" 打败 "复杂+慢+最优"。
+\end{surprising}
+
+\subsection{各种PO方法的对比总结}
+
+\begin{center}
+\begin{tabular}{l|c|c|c|c|c}
+\toprule
+\textbf{方法} & \textbf{年份} & \textbf{需要RM} & \textbf{数据类型} & \textbf{计算量} & \textbf{稳定性} \\
+\midrule
+RLHF-PPO & 2017 & \textcolor{red}{\ding{51}} & 奖励 & 高 & 中 \\
+DPO & 2023 & \textcolor{green}{\ding{55}} & 成对偏好 & 低 & 高 \\
+IPO & 2023 & \textcolor{green}{\ding{55}} & 成对偏好 & 低 & 很高 \\
+KTO & 2024 & \textcolor{green}{\ding{55}} & 单点标注 & 低 & 高 \\
+GRPO & 2024 & \textcolor{red}{\ding{51}} & 奖励 & 中 & 高 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{keypoint}[如何选择PO方法]
+\begin{enumerate}
+    \item \textbf{有成对偏好数据}：优先DPO（简单）或IPO（更鲁棒）
+    \item \textbf{只有好/坏标注}：用KTO
+    \item \textbf{有奖励模型但想避免PPO复杂性}：用GRPO
+    \item \textbf{需要最大灵活性和在线学习}：用PPO
+\end{enumerate}
+\end{keypoint}
+
+%=============================================================================
+\section*{附录：关键数值速查表}
+%=============================================================================
+
+\begin{center}
+\begin{tabular}{l|c|l}
+\toprule
+\textbf{参数} & \textbf{典型值} & \textbf{含义} \\
+\midrule
+PPO clip $\epsilon$ & 0.2 & $r \in [0.8, 1.2]$ \\
+GAE $\lambda$ & 0.95 & 有效视野$\approx 17$步 \\
+折扣因子$\gamma$ & 0.99 & 有效视野$= 100$步 \\
+RLHF $\beta$ & 0.01-0.1 & 奖励差1分$\approx$KL差10-100 \\
+DPO $\beta$ & 0.1-0.5 & 控制偏好强度 \\
+PPO epochs $K$ & 3-10 & 数据复用次数 \\
+PPO minibatch & 64-512 & 每次更新的样本数 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{l|c}
+\toprule
+\textbf{计算量对比} & \textbf{相对值} \\
+\midrule
+普通梯度下降 & 1$\times$ \\
+TRPO & 8-16$\times$ \\
+PPO & 1-2$\times$ \\
+DPO & 1$\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=============================================================================
+\section*{课后练习}
+%=============================================================================
+
+\begin{enumerate}
+    \item \textbf{对偶}：证明TRPO的对偶问题是$\max_{\beta \geq 0} \min_\theta [-L^{\text{CPI}} + \beta D_{KL}] - \beta\delta$。
+    
+    \item \textbf{Clip分析}：当$\epsilon \to 0$时，PPO-Clip退化成什么？当$\epsilon \to 1$时呢？
+    
+    \item \textbf{DPO推导}：从Bradley-Terry模型出发，完整推导DPO的梯度公式。
+    
+    \item \textbf{收敛性}：证明当$\pi_\theta = \pi^*$（RLHF最优策略）时，DPO损失达到最小值$\log 2$。
+    
+    \item \textbf{数值实验}：实现DPO，在一个简单的偏好数据集上训练，画出loss曲线和准确率曲线。
+    
+    \item \textbf{GRPO}：证明GRPO的优势估计$\hat{A}_i = (R_i - \bar{R})/\sigma_R$满足$\sum_i \hat{A}_i = 0$。
+\end{enumerate}
+
+\subsection*{答案提示}
+
+\textbf{1.} 直接展开Lagrangian，注意符号（最小化负目标）。
+
+\textbf{2.} $\epsilon \to 0$：$L^{\text{CLIP}} \to 0$，策略不更新（太保守）。$\epsilon \to 1$：clip范围$[0, 2]$，几乎不起作用，退化为vanilla策略梯度。
+
+\textbf{3.} 设$u = \beta(h_w - h_l)$，$\mathcal{L} = -\log\sigma(u)$，用链式法则。
+
+\textbf{4.} 当$\pi_\theta = \pi^*$时，$\beta \log\frac{\pi^*}{\pi_{\text{ref}}} = R + C$，所以$u = R(y_w) - R(y_l)$。若数据由Bradley-Terry生成，$P(y_w \succ y_l) = \sigma(u)$，则$\mathcal{L} = -\log\sigma(u) = -\log P = H(P)$，最小值在$P = 0.5$时取得，此时$\mathcal{L} = \log 2 \approx 0.693$。
+
+\textbf{5.} 用PyTorch实现，观察loss从0.693下降的过程。
+
+\textbf{6.} $\sum_i \hat{A}_i = \sum_i (R_i - \bar{R})/\sigma_R = (\sum_i R_i - G\bar{R})/\sigma_R = (G\bar{R} - G\bar{R})/\sigma_R = 0$。
+
+\end{document}

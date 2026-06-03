@@ -9,6 +9,7 @@
 \usepackage{tcolorbox}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
+\usepackage{float}
 \usepackage{booktabs}
 \usepackage{hyperref}
 \usepackage{xcolor}
@@ -31,6 +32,7 @@
 % 自定义盒子
 \tcbuselibrary{skins,breakable}
 \newtcolorbox{intuition}[1][直觉]{
+  breakable,
   colback=blue!5!white,
   colframe=blue!75!black,
   fonttitle=\bfseries,
@@ -38,6 +40,7 @@
 }
 
 \newtcolorbox{keypoint}[1][关键点]{
+  breakable,
   colback=red!5!white,
   colframe=red!75!black,
   fonttitle=\bfseries,
@@ -45,6 +48,7 @@
 }
 
 \newtcolorbox{plainwords}[1][大白话]{
+  breakable,
   colback=yellow!8!white,
   colframe=yellow!60!black,
   fonttitle=\bfseries,
@@ -52,6 +56,7 @@
 }
 
 \newtcolorbox{surprising}[1][匪夷所思]{
+  breakable,
   colback=purple!8!white,
   colframe=purple!75!black,
   fonttitle=\bfseries,
@@ -59,6 +64,7 @@
 }
 
 \newtcolorbox{calculation}[1][动手算一算]{
+  breakable,
   colback=orange!5!white,
   colframe=orange!75!black,
   fonttitle=\bfseries,
@@ -66,6 +72,7 @@
 }
 
 \newtcolorbox{optimization}[1][优化视角]{
+  breakable,
   colback=cyan!5!white,
   colframe=cyan!75!black,
   fonttitle=\bfseries,
@@ -90,6 +97,27 @@
 %=============================================================================
 \section{TRPO回顾：约束优化的起点}
 %=============================================================================
+
+\begin{keypoint}[记号约定（贯穿全篇）]
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+符号 & 含义 \\
+\midrule
+$r(\theta)=\pi_\theta(a|s)/\pi_{\text{old}}(a|s)$ & 重要性比率 \\
+$A,\ \hat{A}$ & 优势函数及其估计 \\
+$L^{\text{CPI}}=\mathbb{E}[r\,A]$ & 代理目标（conservative policy iteration） \\
+$\delta$ & TRPO的KL\emph{硬约束}半径 \\
+$\beta$ & KL\emph{惩罚}系数 / Lagrange乘子 \\
+$\epsilon$ & PPO-Clip的裁剪宽度 \\
+$\lambda$ & GAE的偏差-方差插值参数 \\
+$F$ & Fisher信息矩阵 \\
+$\pi_{\text{ref}}$ & RLHF/DPO中的参考（预训练）策略 \\
+$Z(x)$ & 配分函数 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{keypoint}
 
 \begin{plainwords}[上周的核心结论]
 TRPO解决的是一个\textbf{带约束的优化问题}：
@@ -318,9 +346,9 @@ L^{\text{KLPEN}}(\theta) = \mathbb{E}\left[\frac{\pi_\theta(a|s)}{\pi_{\theta_{\
 \begin{theorem}[最优$\beta$与KL约束的关系]
 设TRPO的KL约束为$\delta$，则最优$\beta^*$满足：
 \[
-\beta^* = \frac{\nabla_\theta L^{\text{CPI}}(\theta^*)^T F^{-1} \nabla_\theta L^{\text{CPI}}(\theta^*)}{2\delta}
+\beta^* = \sqrt{\frac{\nabla_\theta L^{\text{CPI}}(\theta^*)^T F^{-1} \nabla_\theta L^{\text{CPI}}(\theta^*)}{2\delta}}
 \]
-其中$F$是Fisher矩阵。
+其中$F$是Fisher矩阵。等价地$\beta^*=1/\alpha$，$\alpha$为TRPO的最优步长。
 \end{theorem}
 
 \begin{proof}
@@ -338,13 +366,15 @@ $\nabla_\theta L^{\text{KLPEN}} = g - \beta \nabla_\theta D_{KL} = g - \beta F \
 
 \textbf{Step 3}：匹配TRPO的解
 
-要使$\Delta\theta = \alpha F^{-1} g = \sqrt{2\delta / (g^T F^{-1} g)} F^{-1} g$，需要：
+要使$\Delta\theta = \alpha F^{-1} g = \sqrt{2\delta / (g^T F^{-1} g)}\, F^{-1} g$，需要$\frac{1}{\beta^*} = \alpha$，即：
 
 $\frac{1}{\beta^*} = \sqrt{\frac{2\delta}{g^T F^{-1} g}}$
 
-$\beta^* = \sqrt{\frac{g^T F^{-1} g}{2\delta}} = \frac{g^T F^{-1} g}{2\delta} \cdot \frac{1}{\sqrt{g^T F^{-1} g / (2\delta)}} = \frac{g^T F^{-1} g}{2\delta \alpha}$
+两边取倒数：
 
-当$\alpha = \sqrt{2\delta/(g^T F^{-1} g)}$时，$\beta^* = \frac{g^T F^{-1} g}{2\delta}$。
+$\beta^* = \frac{1}{\alpha} = \sqrt{\frac{g^T F^{-1} g}{2\delta}}$
+
+\textbf{注意是平方根}：$\beta^*$与步长$\alpha$互为倒数。因$\alpha\propto\sqrt{\delta}$，故$\beta^*\propto1/\sqrt{\delta}$——约束$\delta$越紧，惩罚$\beta^*$越大，符合直觉。
 \end{proof}
 
 \begin{surprising}[最优$\beta$依赖于Fisher！]
@@ -677,7 +707,7 @@ $r$ & $rA$ & $\text{clip}(r)A$ & $L^{\text{CLIP}}$ \\
 当$r < 0.8$时，目标不再减少！阻止了$\pi_\theta$过度减少坏动作的概率。
 \end{calculation}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}
 \begin{axis}[
@@ -689,19 +719,19 @@ $r$ & $rA$ & $\text{clip}(r)A$ & $L^{\text{CLIP}}$ \\
     legend pos=north west,
     grid=major
 ]
-% A > 0 case
+% A > 0 case（蓝：实线=clip后目标，虚线=未clip的 rA）
 \addplot[blue, thick, domain=0:0.8] {x};
-\addplot[blue, thick, domain=0.8:1.2] {x};
-\addplot[blue, thick, domain=1.2:2.5] {1.2};
-\addplot[blue, dashed, domain=1.2:2.5] {x};
+\addlegendentry{$A>0$（clip后）}
+\addplot[blue, thick, forget plot, domain=0.8:1.2] {x};
+\addplot[blue, thick, forget plot, domain=1.2:2.5] {1.2};
+\addplot[blue, dashed, forget plot, domain=1.2:2.5] {x};
 
-% A < 0 case  
+% A < 0 case（红：实线=clip后目标，虚线=未clip的 rA）
 \addplot[red, thick, domain=0:0.8] {-0.8};
-\addplot[red, thick, domain=0.8:1.2] {-x};
-\addplot[red, thick, domain=1.2:2.5] {-x};
-\addplot[red, dashed, domain=0:0.8] {-x};
-
-\legend{$A>0$实际, $A<0$实际}
+\addlegendentry{$A<0$（clip后）}
+\addplot[red, thick, forget plot, domain=0.8:1.2] {-x};
+\addplot[red, thick, forget plot, domain=1.2:2.5] {-x};
+\addplot[red, dashed, forget plot, domain=0:0.8] {-x};
 \end{axis}
 \end{tikzpicture}
 \caption{PPO-Clip目标函数。虚线是未clip的$rA$，实线是clip后的目标。}
@@ -717,31 +747,29 @@ D_{KL}(\pi_{\text{old}} \| \pi_\theta) \leq \frac{\epsilon^2}{2(1-\epsilon)}
 \end{theorem}
 
 \begin{proof}
-\textbf{Step 1}：KL散度的定义
+\textbf{Step 1}：KL散度的定义。记$r=\pi_\theta/\pi_{\text{old}}$，
 
-$D_{KL}(\pi_{\text{old}} \| \pi_\theta) = \mathbb{E}_{a \sim \pi_{\text{old}}}\left[\log \frac{\pi_{\text{old}}(a)}{\pi_\theta(a)}\right] = \mathbb{E}_{a \sim \pi_{\text{old}}}\left[-\log r\right]$
+$D_{KL}(\pi_{\text{old}} \| \pi_\theta) = \mathbb{E}_{a \sim \pi_{\text{old}}}\left[-\log r\right]$
 
-\textbf{Step 2}：约束$r \in [1-\epsilon, 1+\epsilon]$
+\textbf{Step 2}：关键约束——归一化。注意
 
-$-\log r \in [-\log(1+\epsilon), -\log(1-\epsilon)]$
+$\mathbb{E}_{a\sim\pi_{\text{old}}}[r] = \sum_a \pi_{\text{old}}(a)\frac{\pi_\theta(a)}{\pi_{\text{old}}(a)} = \sum_a \pi_\theta(a) = 1$
 
-\textbf{Step 3}：Taylor展开
+所以\textbf{不能}让所有$r$都取$1-\epsilon$（那样均值是$1-\epsilon\ne1$，违反归一化）。令$u = r-1\in[-\epsilon,\epsilon]$，则$\mathbb{E}[u]=0$。正是这一条把KL从一阶压到二阶。
 
-$-\log(1+\epsilon) \approx -\epsilon + \frac{\epsilon^2}{2}$
+\textbf{Step 3}：二阶上界。对$u\in[-\epsilon,\epsilon]$有不等式
 
-$-\log(1-\epsilon) \approx \epsilon + \frac{\epsilon^2}{2}$
+$-\log(1+u) \le -u + \frac{u^2}{2(1-\epsilon)}$
 
-\textbf{Step 4}：界定KL
+（在$[-\epsilon,\epsilon]$上对两边作差求导即可验证）。取期望并代入$\mathbb{E}[u]=0$：
 
-$D_{KL} = \mathbb{E}[-\log r]$
+$D_{KL} = \mathbb{E}[-\log(1+u)] \le -\underbrace{\mathbb{E}[u]}_{=\,0} + \frac{\mathbb{E}[u^2]}{2(1-\epsilon)} = \frac{\mathbb{E}[u^2]}{2(1-\epsilon)}$
 
-最坏情况：所有$r = 1-\epsilon$，则$D_{KL} = -\log(1-\epsilon) \approx \epsilon + \frac{\epsilon^2}{2}$
+\textbf{Step 4}：因$|u|\le\epsilon$，故$\mathbb{E}[u^2]\le\epsilon^2$，得
 
-更精确的二阶展开：$-\log(1-\epsilon) = \epsilon + \frac{\epsilon^2}{2} + \frac{\epsilon^3}{3} + ... \leq \frac{\epsilon}{1-\epsilon}$
+$D_{KL} \le \frac{\epsilon^2}{2(1-\epsilon)}$
 
-因此$D_{KL} \leq \frac{\epsilon}{1-\epsilon}$。
-
-对于小$\epsilon$，$D_{KL} \lesssim \epsilon$。
+对小$\epsilon$，$D_{KL}\lesssim \epsilon^2/2$——是\textbf{二阶}小量。若忽略归一化、错按"所有$r=1-\epsilon$"估计，会得到一阶的$\epsilon/(1-\epsilon)$，高估约$2/\epsilon$倍。
 \end{proof}
 
 \begin{calculation}[Clip参数与KL的对应]
@@ -750,24 +778,24 @@ $D_{KL} = \mathbb{E}[-\log r]$
 \toprule
 $\epsilon$ & $r$的范围 & KL上界 \\
 \midrule
-0.1 & $[0.9, 1.1]$ & $\approx 0.11$ \\
-0.2 & $[0.8, 1.2]$ & $\approx 0.25$ \\
-0.3 & $[0.7, 1.3]$ & $\approx 0.43$ \\
+0.1 & $[0.9, 1.1]$ & $\approx 0.006$ \\
+0.2 & $[0.8, 1.2]$ & $\approx 0.025$ \\
+0.3 & $[0.7, 1.3]$ & $\approx 0.064$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\textbf{常用$\epsilon = 0.2$}对应KL约束$\approx 0.25$。
+\textbf{常用$\epsilon = 0.2$}对应KL上界$\approx 0.025$。
 
-对比TRPO常用$\delta = 0.01$，PPO的"隐式约束"宽松得多！
+对比TRPO常用$\delta = 0.01$，二者其实是\textbf{同一量级}——这正解释了为什么$\epsilon=0.2$在实践中表现接近TRPO。（若误用一阶界$\epsilon/(1-\epsilon)=0.25$，会高估25倍。）
 
-\textbf{为什么还能工作？}因为clip不是硬约束，而是"软边界"——超出范围时梯度为零，但不禁止。
+\textbf{此外}，clip不是硬约束，而是"软边界"——超出范围时梯度为零，但不禁止。
 \end{calculation}
 
 \begin{surprising}[$\epsilon = 0.2$为什么Work？]
-从理论上看，$\epsilon = 0.2$允许KL高达0.25，远超TRPO的0.01。
+由上面的\textbf{二阶}界，$\epsilon = 0.2$对应的单步KL上界仅$\approx 0.025$，已与TRPO的0.01同量级（而非一阶误估的0.25）。
 
-\textbf{但实际中}：
+\textbf{而且实际中更小}：
 \begin{enumerate}
     \item 不是所有$(s,a)$都达到clip边界
     \item 多数$r$在1附近，只有少数极端
@@ -788,9 +816,9 @@ $\epsilon$ & $r$的范围 & KL上界 \\
 
 \begin{theorem}[PPO-Clip的梯度]
 \[
-\nabla_\theta L^{\text{CLIP}} = \mathbb{E}\left[\nabla_\theta \log \pi_\theta(a|s) \cdot A \cdot \mathbf{1}[r \in \text{active region}]\right]
+\nabla_\theta L^{\text{CLIP}} = \mathbb{E}\left[r(\theta)\, A \cdot \nabla_\theta \log \pi_\theta(a|s) \cdot \mathbf{1}[r \in \text{active region}]\right]
 \]
-其中active region是clip不起作用的区域：
+（在$\theta=\theta_{\text{old}}$即$r=1$时退化为$A\,\nabla_\theta\log\pi_\theta$。）active region是clip不起作用的区域：
 \begin{itemize}
     \item $A > 0$时：$r < 1 + \epsilon$
     \item $A < 0$时：$r > 1 - \epsilon$
@@ -831,6 +859,8 @@ $L^{\text{CLIP}} = \min(rA, (1-\epsilon)A) = A \cdot \max(r, 1-\epsilon)$（因�
 \textbf{PPO-Clip}是让油门失效（梯度截断）
 
 效果类似，但PPO简单得多！
+
+\textbf{更深一层}：为什么是$\min$而不是直接截断$r$？因为$\min(rA,\ \text{clip}(r)A)$让$L^{\text{CLIP}}$成为真实代理目标的\textbf{悲观下界}——优化一个下界天然保守，单个样本的$r$再怎么暴涨也不会让目标继续升高，从而抑制过度更新。这是clip区别于"单纯裁剪比率"的精髓。
 \end{keypoint}
 
 %=============================================================================
@@ -945,17 +975,17 @@ GAE在TD和MC之间取得平衡。
 $\lambda$ & $\hat{A}_0$ & $\hat{A}_1$ & $\hat{A}_2$ & $\hat{A}_3$ & $\hat{A}_4$ & 有效视野 \\
 \midrule
 0 & -0.40 & 0.70 & -1.20 & 1.90 & -2.00 & 1.0步 \\
-0.5 & -0.37 & 0.35 & -0.98 & 1.00 & -2.00 & 2.2步 \\
+0.5 & -0.24 & 0.36 & -0.75 & 1.00 & -2.00 & 1.8步 \\
 0.8 & -0.35 & 0.07 & -0.87 & 0.46 & -2.00 & 3.6步 \\
-0.95 & -0.45 & -0.17 & -0.88 & 0.19 & -2.00 & 6.9步 \\
-1 & -0.67 & -0.33 & -0.94 & 0.10 & -2.00 & 10步 \\
+0.95 & -0.56 & -0.19 & -1.04 & 0.19 & -2.00 & 6.9步 \\
+1 & -0.67 & -0.30 & -1.11 & 0.10 & -2.00 & 10步 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 有效视野 $= 1/(1-\gamma\lambda)$
 
-\textbf{观察}：$\lambda$越大，$\hat{A}_0$越受远处（$r_3, r_4$）影响，绝对值越大。
+\textbf{观察}：$\lambda$越大，越多远处TD误差（$\delta_3,\delta_4$）被计入$\hat{A}_0$，估计的有效视野越长。
 \end{calculation}
 
 \begin{theorem}[GAE是$n$步估计的指数平均]
@@ -1034,13 +1064,12 @@ GAE给出$-2.76$，MC给出$-3.0$，GAE更接近TD的$-0.04$。
 \end{calculation}
 
 \begin{theorem}[GAE的偏差-方差权衡]
-设$V$有误差$\epsilon_V = V - V^{\pi}$，则：
+设$V$有误差$\epsilon_V = V - V^{\pi}$，则（量级估计）：
 \[
-\text{Bias}[\hat{A}^{\text{GAE}}] = O\left(\frac{\gamma(1-\lambda)}{1-\gamma\lambda} \epsilon_V\right)
+\text{Bias}[\hat{A}^{\text{GAE}}] = O\big((1-\lambda)\,\epsilon_V\big),\qquad
+\text{Var}[\hat{A}^{\text{GAE}}] = O\left(\frac{1}{1-(\gamma\lambda)^2}\, \sigma_r^2\right)
 \]
-\[
-\text{Var}[\hat{A}^{\text{GAE}}] = O\left(\frac{1}{1-(\gamma\lambda)^2} \sigma_r^2\right)
-\]
+即$\lambda$越大偏差越小（$\lambda=1$时为零，退化为无偏的MC），方差越大。
 \end{theorem}
 
 \begin{proof}[证明思路]
@@ -1198,6 +1227,57 @@ RLHF = Reinforcement Learning from Human Feedback
 \textbf{方法}：用PPO微调语言模型，奖励由"人类偏好模型"给出
 \end{plainwords}
 
+\subsection{综述：闭式解作为理论桥梁}
+
+现实中的RLHF通常是：\textbf{先从人类反馈数据里学一个奖励模型，再用这个奖励去优化策略}。而下面要推的"最优策略闭式解"本身\emph{并不}直接拿来生成答案——它更像一座\textbf{理论桥梁}，连接"奖励"与"策略"，并由此派生出PPO与DPO两条现实路线。
+
+核心是KL正则化RLHF目标的闭式解（下文严格推导）：
+\[
+\pi^*(y\mid x)=\frac{1}{Z(x)}\,\pi_{\text{ref}}(y\mid x)\,\exp\!\Big(\frac{R(x,y)}{\beta}\Big).
+\]
+读法：\textbf{最优策略 = 参考模型 $\times$ 奖励的指数加权，再归一化}。模型不是一味追高奖励，而是在参考模型\emph{附近}移动——奖励高的回答概率上升、低的下降，但KL惩罚拦着它别偏离原模型太远（$\beta$越大越保守）。
+
+\textbf{现实中两类用法。}
+
+\textbf{(1) 传统RLHF：真的先学一个奖励模型。}
+\begin{enumerate}
+\item 先训练SFT模型，作为参考策略 $\pi_{\text{ref}}(y|x)$。
+\item 同一prompt生成多个回答，由人标注偏好，得到三元组 $(x,y_w,y_l)$（$y_w$是preferred、$y_l$是rejected）。
+\item 用Bradley-Terry/logistic损失训练\textbf{奖励模型} $R_\phi(x,y)$，使 $R_\phi(x,y_w)>R_\phi(x,y_l)$：
+\[
+\mathcal{L}_R=-\log\sigma\big(R_\phi(x,y_w)-R_\phi(x,y_l)\big).
+\]
+\item 再用PPO（或类似算法）优化
+\[
+\max_\theta\ \mathbb{E}_{y\sim\pi_\theta}[R_\phi(x,y)]-\beta D_{KL}(\pi_\theta\Vert\pi_{\text{ref}}).
+\]
+\end{enumerate}
+注意：这里的奖励\emph{不是}世界天然给的，而是从人类\textbf{偏好}数据中拟合出来的。
+
+\textbf{(2) DPO类：不显式学奖励，把闭式解\emph{反过来}用。}
+闭式解可反解出奖励（详见后面的推论）：
+\[
+R(x,y)=\beta\log\frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)}+\beta\log Z(x),
+\]
+其中 $Z(x)$ 只与prompt有关，在同一prompt下两回答\emph{相减时抵消}：
+\[
+R(x,y_w)-R(x,y_l)=\beta\Big[\log\tfrac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)}-\log\tfrac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\Big].
+\]
+于是\textbf{不必训练奖励模型}：直接训练策略，让preferred相对参考模型的概率提升幅度，大于rejected的提升幅度——这就是DPO的核心。
+
+\begin{keypoint}[为什么不直接用闭式解生成？]
+因为配分函数
+\[
+Z(x)=\sum_y \pi_{\text{ref}}(y|x)\exp\big(R(x,y)/\beta\big)
+\]
+要对\emph{所有可能回答} $y$ 求和——语言模型的回答空间是天文数字，根本无法枚举。所以现实中从不真的去算 $\pi^*(y|x)$，而是把闭式解当\textbf{指导}：
+\begin{itemize}
+\item \textbf{传统RLHF}：先学奖励，再用PPO近似优化该目标；
+\item \textbf{DPO/IPO/KTO/ORPO}：利用闭式解把奖励\emph{消掉}，直接从偏好数据训练策略。
+\end{itemize}
+两条路殊途同归，差别只在"奖励是显式学出来、还是被解析地消掉"。
+\end{keypoint}
+
 \subsection{RLHF的优化问题}
 
 \begin{definition}[RLHF目标]
@@ -1232,6 +1312,45 @@ RLHF = Reinforcement Learning from Human Feedback
     \item KL约束保留这种"常识"
 \end{itemize}
 \end{keypoint}
+
+\subsection{用PPO后训练大语言模型：clip在RLHF里长这样}
+
+前面的clip（\S4）、GAE（\S5）都是在抽象的$(s,a)$上讲的。落到语言模型，只要把"状态/动作"对应过去：\textbf{生成一句话就是一条轨迹，每吐一个token就是走一步}。这一节把它接成可跑的recipe，并明确\emph{clip到底用在哪}。
+
+\textbf{Token级MDP。} 对prompt $x$，自回归生成回答 $y=(y_1,\dots,y_T)$：状态 $s_t=(x,y_{<t})$（prompt加已生成前缀），动作 $a_t=y_t$（下一个token），策略 $\pi_\theta(y_t\mid x,y_{<t})$ 就是语言模型的下一token分布；一条轨迹即生成完整回答（句子短，通常取$\gamma\approx1$）。
+
+\textbf{奖励怎么给（最关键、也最LLM特有）。} 奖励模型 $R_\phi$ 只在\emph{句末}给一个标量分 $R_\phi(x,y)$；而RLHF目标里的 $-\beta D_{KL}(\pi_\theta\Vert\pi_{\text{ref}})$ 被\textbf{摊到每个token}上，写成逐token的KL惩罚。于是每步奖励为
+\[
+r_t=\underbrace{-\beta\log\frac{\pi_\theta(y_t\mid s_t)}{\pi_{\text{ref}}(y_t\mid s_t)}}_{\text{逐token KL惩罚（每步都有）}}+\underbrace{\mathbf{1}[t=T]\,R_\phi(x,y)}_{\text{只有句末才有RM奖励}}.
+\]
+直觉：每写一个token都因"偏离参考模型"被轻罚，整句写完才由奖励模型打总分；把 $r_t$ 沿句子加起来，正好近似 $\mathbb{E}[R_\phi]-\beta D_{KL}$。
+
+\textbf{价值与优势。} 在语言模型上再接一个value head $V_\psi(s_t)$ 估计后续回报，用\S5的GAE在token序列上算优势：
+\[
+\delta_t=r_t+\gamma V_\psi(s_{t+1})-V_\psi(s_t),\qquad \hat A_t=\sum_{l\ge0}(\gamma\lambda)^l\delta_{t+l}.
+\]
+
+\textbf{这里才真正用上clip。} 把\S4的PPO-Clip目标原样搬来，只是"动作=token、比率=逐token概率比"：
+\[
+\rho_t(\theta)=\frac{\pi_\theta(y_t\mid x,y_{<t})}{\pi_{\theta_{\text{old}}}(y_t\mid x,y_{<t})},\qquad
+L^{\text{CLIP}}=\mathbb{E}_t\Big[\min\!\big(\rho_t(\theta)\hat A_t,\ \mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)\,\hat A_t\big)\Big].
+\]
+clip在这里的作用：限制\emph{每个token}的概率在一次更新里别离 $\pi_{\theta_{\text{old}}}$ 太远，把策略锁在参考模型附近，防止微调把语言模型"调崩"（语无伦次、模式坍塌）。它和上面的逐token KL惩罚是两道并行的"别跑偏"保险。完整的PPO总损失为
+\[
+L=\underbrace{L^{\text{CLIP}}}_{\text{策略}}\;-\;c_1\underbrace{\big(V_\psi(s_t)-\hat R_t\big)^2}_{\text{价值回归}}\;+\;c_2\underbrace{\mathcal{H}[\pi_\theta]}_{\text{熵奖励}},
+\]
+其中 $\hat R_t=\hat A_t+V_\psi(s_t)$ 是价值回归的目标。
+
+\begin{keypoint}[完整流程：SFT $\to$ RM $\to$ PPO]
+\begin{enumerate}
+\item \textbf{SFT}：监督微调得到 $\pi_{\text{ref}}$（也是PPO的初始 $\pi_\theta$）。
+\item \textbf{RM}：用偏好数据训奖励模型 $R_\phi$（Bradley-Terry损失）。
+\item \textbf{PPO循环}：取一批prompt，用当前 $\pi_\theta$（即本批的 $\pi_{\theta_{\text{old}}}$）采样回答 $\to$ 用 $R_\phi$ 打分、算逐token奖励 $r_t$ $\to$ value head$+$GAE算 $\hat A_t$ $\to$ 在这批数据上做 $K$ 轮minibatch的clip更新（同时回归value head）$\to$ 换下一批，循环。
+\end{enumerate}
+每换一批就刷新 $\pi_{\theta_{\text{old}}}$ 与优势，clip只在同一批的 $K$ 轮内约束漂移；实现里常再加\textbf{按KL早停}（一批内若 $\mathbb{E}[D_{KL}(\pi_{\text{old}}\Vert\pi_\theta)]$ 超阈值就提前结束这轮）兜底。这就是\S7.1里"传统RLHF：先学奖励、再用PPO优化"那条路的具体长相。
+\end{keypoint}
+
+\subsection{最优策略的闭式解（通往DPO的桥）}
 
 \begin{theorem}[RLHF的最优策略——闭式解]
 RLHF目标的最优策略为：
@@ -1294,6 +1413,16 @@ R(x, y) = \beta \log \frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
 \]
 移项得$R(y) = \beta \log \frac{\pi^*(y)}{\pi_{\text{ref}}(y)} + \beta \log Z$。
 \end{proof}
+
+\begin{intuition}[物理意义：温度、隐式奖励、与"只有差有意义"]
+两个闭式解放在一起，有三层意思值得记住：
+
+\textbf{(1) Boltzmann分布——$\beta$是温度。} $\pi^*\propto\pi_{\text{ref}}\,e^{R/\beta}$ 是吉布斯分布：$\pi_{\text{ref}}$是\emph{先验}，$-R$是\emph{能量}，$Z$是\emph{配分函数}。$\beta$扮演温度：$\beta\to0$（弱KL，低温）→ $\pi^*$塌到reward最高的回答（贪婪）；$\beta\to\infty$（强KL，高温）→ $\pi^*\to\pi_{\text{ref}}$（退回先验）。下面$\beta=2/1/0.5$的数值表就是一次"降温"。
+
+\textbf{(2) 策略本身就是隐式奖励模型。} 反解式说：拿到对齐后的$\pi^*$就能\emph{读出}奖励，$\log\frac{\pi^*}{\pi_{\text{ref}}}$正是"对齐把回答$y$相对预训练先验抬高/压低了多少"。不必单独训reward model——这正是DPO的根基。
+
+\textbf{(3) 奖励只能恢复到"每prompt一个常数"。} $\beta\log Z(x)$只依赖$x$、不依赖$y$。所以$R$与$R+c(x)$给出\emph{完全相同}的$\pi^*$和偏好——\textbf{只有同一prompt内的奖励差有意义，绝对值不可辨识}。这也是$\log Z$在DPO里必然抵消的根本原因。
+\end{intuition}
 
 \begin{calculation}[RLHF的详细数值例子]
 \textbf{设置}：prompt $x$ = "Explain quantum physics"
@@ -1508,15 +1637,17 @@ $\sigma'(u) = \sigma(u)(1 - \sigma(u))$
 
 \textbf{Step 2}：$\log \sigma$的导数
 
-$\frac{d}{du}(-\log \sigma(u)) = -\frac{\sigma'(u)}{\sigma(u)} = -(1 - \sigma(u)) = \sigma(-u) - 1$
+$\frac{d}{du}(-\log \sigma(u)) = -\frac{\sigma'(u)}{\sigma(u)} = -(1 - \sigma(u)) = -\sigma(-u)$
+
+（用了恒等式$1-\sigma(u)=\sigma(-u)$。）
 
 \textbf{Step 3}：对$\theta$的梯度
 
 $\nabla_\theta u = \beta \nabla_\theta \log \pi_\theta(y_w) - \beta \nabla_\theta \log \pi_\theta(y_l)$
 
-$\nabla_\theta \mathcal{L} = (\sigma(-u) - 1) \cdot \beta (\nabla_\theta \log \pi_\theta(y_w) - \nabla_\theta \log \pi_\theta(y_l))$
+$\nabla_\theta \mathcal{L} = -\sigma(-u) \cdot \beta (\nabla_\theta \log \pi_\theta(y_w) - \nabla_\theta \log \pi_\theta(y_l))$
 
-$= -\beta \sigma(-u) (\nabla_\theta \log \pi_\theta(y_w) - \nabla_\theta \log \pi_\theta(y_l))$
+$= \beta\,\sigma(-u)\, (\nabla_\theta \log \pi_\theta(y_l) - \nabla_\theta \log \pi_\theta(y_w))$
 
 $= \beta (1 - \sigma(u)) (\nabla_\theta \log \pi_\theta(y_l) - \nabla_\theta \log \pi_\theta(y_w))$
 
@@ -1668,14 +1799,17 @@ $\mathcal{L} = -\log \sigma(0.8) = -\log(0.69) = 0.371$
 \end{theorem}
 
 \begin{proof}
-\textbf{Step 1}：DPO最优的充分条件
+\textbf{Step 1}：DPO期望损失的最优条件（注意\emph{不是}让loss$\to0$）
 
-DPO损失为零当且仅当对所有$(y_w, y_l)$：
+偏好由BT模型按真实奖励$R^*$\textbf{随机}生成，故$P^*(y_w\succ y_l)=\sigma(R^*(y_w)-R^*(y_l))$一般落在$(0,1)$内，而非$0/1$。最小化期望DPO损失
 \[
-\sigma\left(\beta \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \beta \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)}\right) = 1
+\min_\theta\ \mathbb{E}_{(y_w,y_l)}\big[-\log\sigma(u_\theta)\big],\qquad u_\theta=\beta\log\tfrac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)}-\beta\log\tfrac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)}
 \]
-
-这要求$\beta \log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)} - \beta \log \frac{\pi_\theta(y_l)}{\pi_{\text{ref}}(y_l)} \to +\infty$
+本质是让模型预测的偏好概率$\sigma(u_\theta)$去拟合真实$P^*$（交叉熵，最优在$\sigma(u_\theta)=P^*$处取得）。因此最优在\textbf{有限}的$u_\theta$处：
+\[
+u_\theta^\star = R^*(y_w)-R^*(y_l)\quad(\text{有限}),
+\]
+而\textbf{不是}$u_\theta\to+\infty$——后者只在偏好确定可分（$P^*\in\{0,1\}$）时才出现。这也澄清了一个常见误解：DPO并不把概率推到$0/1$。
 
 \textbf{Step 2}：与Bradley-Terry的一致性
 
@@ -2066,6 +2200,8 @@ $\pi(y) = \pi_{\text{ref}}(y) \exp\left(\frac{g(y) - \beta - \lambda}{\beta}\rig
 因此$f(y) = e^{g(y)/\beta}$。
 \end{proof}
 
+\textbf{统一的物理图景}：所有PO方法都是对\emph{同一个先验}$\pi_{\text{ref}}$做\textbf{指数倾斜}（Boltzmann tilt）$\pi^*\propto\pi_{\text{ref}}\,e^{g/\beta}$，区别\emph{仅}在于用什么"能量/质量信号"$g(y)$——RLHF用奖励$R$，DPO用隐式奖励，IPO用有界margin，GRPO用群体相对名次。一句话：大家都在给基座模型"加温/调味"，配方不同而已。
+
 \begin{calculation}[各方法的$f(y)$]
 \textbf{RLHF}：$g(y) = R(y)$ → $f(y) = e^{R(y)/\beta}$
 
@@ -2213,23 +2349,23 @@ $\epsilon$ & 达到目标的步数 & 最终奖励 & 训练稳定性 \\
 \toprule
 $\lambda$ & $\gamma\lambda$ & 有效视野$H$ & 偏差$\propto$ & 方差$\propto$ \\
 \midrule
-0 & 0 & 1 & $\epsilon_V = 0.1$ & $\sigma_r^2 = 1$ \\
+0 & 0 & 1 & $0.10$ & $1.0$ \\
 0.5 & 0.495 & 2 & $0.05$ & $1.3$ \\
-0.9 & 0.891 & 9 & $0.011$ & $5.7$ \\
-0.95 & 0.9405 & 17 & $0.006$ & $10$ \\
-0.99 & 0.9801 & 50 & $0.002$ & $25$ \\
+0.9 & 0.891 & 9 & $0.01$ & $4.9$ \\
+0.95 & 0.9405 & 17 & $0.005$ & $8.7$ \\
+0.99 & 0.9801 & 50 & $0.001$ & $25$ \\
 1 & 0.99 & 100 & $0$ & $50$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\textbf{MSE} = 偏差$^2$ + 方差
+\textbf{MSE} = 偏差$^2$ + 方差。本例$\epsilon_V$小、$\sigma_r^2$大，\textbf{方差项完全主导}，MSE随$\lambda$单调上升：
 
-$\lambda = 0.95$：MSE $\approx 0.006^2 + 10 = 10.00004$
+$\lambda = 0$：MSE $\approx 0.10^2 + 1.0 = 1.01$（本例最小）
 
-$\lambda = 0.9$：MSE $\approx 0.011^2 + 5.7 = 5.70012$
+$\lambda = 0.95$：MSE $\approx 0.005^2 + 8.7 \approx 8.7$
 
-\textbf{$\lambda = 0.9$的MSE最小}！但差距不大，所以$[0.9, 0.99]$都可以。
+\textbf{所以"sweet spot"并非普适}：最优$\lambda$取决于$\epsilon_V$与$\sigma_r^2$的相对大小——critic越准（$\epsilon_V$小）、回报噪声越大（$\sigma_r^2$大），越该用\emph{小}$\lambda$；反之critic差则增大$\lambda$以降偏差。实践默认$\lambda=0.95$是"critic中等、回报方差中等"下的经验折中，并非对所有$(\epsilon_V,\sigma_r^2)$都最优。
 \end{calculation}
 
 %=============================================================================

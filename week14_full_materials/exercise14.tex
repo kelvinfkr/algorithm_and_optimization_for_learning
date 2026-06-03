@@ -1,0 +1,512 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath,amsthm,amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{geometry}
+\usepackage{tcolorbox}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{pifont}
+
+\geometry{margin=2.5cm}
+
+\theoremstyle{definition}
+\newtheorem{problem}{题}
+
+\tcbuselibrary{skins,breakable}
+\newtcolorbox{hintbox}[1][提示]{
+  colback=blue!4!white,
+  colframe=blue!60!black,
+  fonttitle=\bfseries,
+  title={#1},
+  breakable,
+  fontupper=\small
+}
+
+\newtcolorbox{topicbox}[1][涉及内容]{
+  colback=gray!6!white,
+  colframe=gray!50!black,
+  fonttitle=\bfseries,
+  title={#1},
+  before skip=4pt, after skip=4pt,
+  fontupper=\small
+}
+
+\newtcolorbox{takeaway}[1][\ding{72}\,你应该带走的结论]{
+  colback=purple!5!white,
+  colframe=purple!70!black,
+  fonttitle=\bfseries,
+  title={#1},
+  breakable,
+  before skip=5pt, after skip=8pt
+}
+
+\title{\textbf{强化学习作业}\\[0.4em]
+\large 第 12 周：MDP / 深度策略梯度 / PPO 及其变体}
+\author{优化算法课程}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{
+\small
+\textbf{说明}：本次作业共 10 题，覆盖
+\textit{lecture12}（MDP 与 Tabular RL）、
+\textit{deepRL}（策略梯度与 TRPO）、
+\textit{PPOwithFriends}（PPO 及其变体）三讲。
+\textbf{每道题都已拆成若干小步}，每步只需做一次代入、求导或代数化简——
+按顺序推一遍即可，不需要自己设计证明结构。
+\textbf{每题末尾的紫色「结论」框点出这道题真正要理解的核心思想}，请务必读完并思考其中的追问。
+}}
+\end{center}
+
+\bigskip
+
+%=============================================================================
+\section*{Part I. MDP 与 Tabular RL（lecture12）}
+%=============================================================================
+
+\begin{problem}[手算 Bellman 方程]
+考虑一个 3 状态 MDP，$\gamma = 0.5$（折扣很大，方便手算）。状态 $\{1, 2, 3\}$，每个状态只有一个动作（即"无控制"，直接评估）：
+\begin{itemize}
+    \item 状态 1：奖励 $R_1 = 2$，确定转到状态 2；
+    \item 状态 2：奖励 $R_2 = 0$，确定转到状态 3；
+    \item 状态 3：奖励 $R_3 = 4$，确定转到状态 1。
+\end{itemize}
+按下列步骤求 $V(1), V(2), V(3)$：
+\begin{enumerate}[label=(\alph*)]
+    \item 写出三条 Bellman 期望方程（每条形如 $V(i) = R_i + \gamma V(\text{下一个状态})$）。
+    \item 把方程 (a) 写成矩阵形式 $V = R + \gamma P V$，明确列出 $R \in \mathbb{R}^3$ 与 $P \in \mathbb{R}^{3\times 3}$。
+    \item 解线性方程组 $(I - \gamma P)V = R$，得到 $V(1), V(2), V(3)$ 的数值。
+    \item 直接展开 $V(1) = R_1 + \gamma R_2 + \gamma^2 R_3 + \gamma^3 R_1 + \cdots$ 计算前 6 项的部分和，验证与 (c) 一致（误差应在 $\gamma^6 \cdot R_{\max}/(1-\gamma)$ 量级）。
+\end{enumerate}
+\begin{topicbox}
+lecture12 §3：Bellman 期望方程
+\end{topicbox}
+\begin{takeaway}
+Bellman 方程把一个\textbf{无限期的求和}（$\sum_{t=0}^\infty \gamma^t r_t$）变成了\textbf{有限个联立线性方程}——这正是 RL 可计算的根本原因。
+(d) 中"展开求和"和 (c) 中"解方程"得到同一个答案，说明递归式 $V = R + \gamma PV$ 和无穷级数是\textbf{等价}的两种视角。\\
+\textit{一句话追问}：这个递归之所以成立，依赖于哪条性质？（提示：未来只取决于当前状态，与如何到达无关——马尔可夫性。）
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[亲手跑值迭代，看误差几何衰减]
+考虑 2 状态 MDP $\{A, B\}$，$\gamma = 0.5$，单动作（即策略评估）：
+\begin{itemize}
+    \item 状态 $A$：奖励 $2$，确定转到 $B$；
+    \item 状态 $B$：奖励 $0$，确定转到 $A$。
+\end{itemize}
+Bellman 更新即 $V_{k+1}(A) = 2 + 0.5\,V_k(B)$，$V_{k+1}(B) = 0 + 0.5\,V_k(A)$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item \textbf{先求真解}：解联立方程 $V(A) = 2 + 0.5 V(B)$, $V(B) = 0.5 V(A)$，得到 $V^*(A), V^*(B)$。
+    \item \textbf{手动迭代}：从 $V_0 = (0, 0)$ 开始，逐步代入更新公式，填出下表（每步只是两次乘加）：
+    \begin{center}
+    \begin{tabular}{c|c|c|c}
+    \toprule
+    $k$ & $V_k(A)$ & $V_k(B)$ & 误差 $\|V_k - V^*\|_\infty$ \\
+    \midrule
+    0 & 0 & 0 & ? \\
+    1 & ? & ? & ? \\
+    2 & ? & ? & ? \\
+    3 & ? & ? & ? \\
+    4 & ? & ? & ? \\
+    \bottomrule
+    \end{tabular}
+    \end{center}
+    \item \textbf{看见收缩}：算出相邻两步的\textbf{误差比} $\dfrac{\|V_{k+1} - V^*\|_\infty}{\|V_k - V^*\|_\infty}$。
+    它应该约等于多少？与 $\gamma$ 比较——这就是"$\gamma$-收缩"的字面含义：每次迭代误差缩小到原来的 $\gamma$ 倍。
+    \item \textbf{由收缩到速度界}：既然误差每步 $\times\gamma$，从 $\|V_0 - V^*\|$ 出发，写出 $\|V_k - V^*\|_\infty \le \gamma^k \|V_0 - V^*\|_\infty$。
+    取一般的 $\gamma = 0.9$、初始误差 $\le R_{\max}/(1-\gamma) = 10$，要使误差 $\le 10^{-2}$ 至少需多少次迭代？（解 $0.9^k \cdot 10 \le 10^{-2}$。）
+    \item \textbf{有效视野}：定义 $H_{\mathrm{eff}} = 1/(1-\gamma)$。分别算 $\gamma = 0.9,\ 0.99,\ 0.999$ 的 $H_{\mathrm{eff}}$。
+    $\gamma$ 每靠近 1 一个数量级，视野放大几倍？
+\end{enumerate}
+\begin{topicbox}
+lecture12 §4：Banach 不动点与值迭代
+\end{topicbox}
+\begin{takeaway}
+(c) 中你会亲眼看到误差序列 $\approx 2.67, 1.33, 0.67, 0.33, \ldots$——每步几乎正好减半，正是 $\gamma = 0.5$。
+这就是\textbf{收缩映射}：不需要知道真解在哪，每次迭代都\textbf{保证}靠近一个固定比例。\\
+但收敛\textbf{速度}由 $\gamma$ 决定：$\gamma \to 1$ 时所需迭代次数 $\sim \frac{1}{1-\gamma}$ 爆炸。
+这个量 $H_{\mathrm{eff}} = \frac{1}{1-\gamma}$ 是 RL 最重要的量级之一，几乎出现在所有误差界里（如 Simulation Lemma 的 $\frac{1}{(1-\gamma)^2}$）。\\
+\textit{为什么重要}：它解释了"长期信用分配"为何是 RL 最难的部分——越在乎远期（$\gamma$ 越大），问题越难。
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[手算 Monte Carlo 评估]
+你跑了一条轨迹（无折扣前的纯奖励流），$\gamma = 0.5$：
+\[
+s_1 \xrightarrow{r_1 = 1} s_2 \xrightarrow{r_2 = 2} s_3 \xrightarrow{r_3 = 0} s_1 \xrightarrow{r_4 = 3} \text{终止}.
+\]
+（注意：状态 $s_1$ 被访问了两次，分别在 $t = 1$ 和 $t = 4$。）
+
+\begin{enumerate}[label=(\alph*)]
+    \item \textbf{算 return}：按定义 $G_t = r_t + \gamma r_{t+1} + \gamma^2 r_{t+2} + \cdots$ 计算
+    \[
+    G_1, \quad G_2, \quad G_3, \quad G_4.
+    \]
+    （提示：从后往前算更省力——$G_4 = 3$，$G_3 = 0 + 0.5 \times G_4$，依此类推。）
+    
+    \item \textbf{Every-visit MC}：把每次访问 $s$ 时的 $G_t$ 都拿来平均。
+    用 (a) 中的结果填表：
+    \begin{center}
+    \begin{tabular}{c|c|c}
+    \toprule
+    状态 & 访问发生在 & $V(s)$ 的 every-visit 估计 \\
+    \midrule
+    $s_1$ & $t = 1, 4$ & $(G_1 + G_4)/2 = ?$ \\
+    $s_2$ & $t = 2$ & $G_2 = ?$ \\
+    $s_3$ & $t = 3$ & $G_3 = ?$ \\
+    \bottomrule
+    \end{tabular}
+    \end{center}
+    
+    \item \textbf{First-visit MC}：每条轨迹中只用\textbf{首次}访问的 $G_t$。
+    给出 $V(s_1), V(s_2), V(s_3)$ 的 first-visit 估计。哪一个状态的估计与 (b) 不同？为什么？
+    
+    \item \textbf{增量平均}：又跑了第二条轨迹，得到 $s_1$ 的一个新的 return $G^{(2)} = 5$。
+    要把它合并到 (c) 的 first-visit 估计上。增量平均公式：
+    $V_{\text{new}}(s_1) = V_{\text{old}}(s_1) + \frac{1}{n}\!\left(G^{(2)} - V_{\text{old}}(s_1)\right)$，
+    其中 $n$ 是 $s_1$ 累计的样本数（这里 $n = 2$）。计算 $V_{\text{new}}(s_1)$。
+    
+    \item \textbf{对比 MC 与 TD}：MC 必须等到 episode 结束才能更新，TD(0) 每步就能更新。
+    举一个 episode 极长（甚至无终止）的场景，说明 MC 不能用而 TD 可以用。
+\end{enumerate}
+\begin{topicbox}
+lecture12 §5：Monte Carlo 评估
+\end{topicbox}
+\begin{takeaway}
+MC 和 TD 代表 RL 价值估计的两个极端，差别体现在两个维度：\\
+\textbf{(1) 偏差-方差}：MC 用真实回报 $G_t$ → \textbf{无偏但高方差}；TD 用 $r + \gamma V(s')$ 自举(bootstrap) → \textbf{有偏（依赖当前 $V$ 的猜测）但低方差}。\\
+\textbf{(2) 更新时机}：MC 必须等 episode 结束（要完整 $G_t$）；TD 每步就能更新。\\
+这正是 (e) 中"无终止任务只能用 TD"的原因。后面 GAE（题 7）就是用一个旋钮 $\lambda$ 在 MC 和 TD 之间\textbf{连续插值}。
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[Baseline 到底降了多少方差]
+考虑单状态、标量参数的简化情形。设 score $\psi = \nabla_\theta \log \pi_\theta(a|s)$，
+回报 $G$，记 $\mu = \mathbb{E}[G]$, $\sigma^2 = \mathrm{Var}[G]$。
+策略梯度估计 $\hat g = \psi \cdot G$，加 baseline 后 $\hat g_b = \psi \cdot (G - b)$。
+为简化，假设：
+\textbf{(i)} score 与回报独立（$\psi \perp G$）；
+\textbf{(ii)} score 零均值 $\mathbb{E}[\psi] = 0$（这是 score 的普遍性质）；
+\textbf{(iii)} $\mathbb{E}[\psi^2] = I$（标量 Fisher 信息）。
+
+\begin{enumerate}[label=(\alph*)]
+    \item \textbf{期望不变}：用 (ii) 证明 $\mathbb{E}[\hat g_b] = \mathbb{E}[\hat g]$。
+    （提示：$\mathbb{E}[\psi b] = b\,\mathbb{E}[\psi] = 0$，故减去 $b$ 不改变期望。）
+    
+    \item \textbf{无 baseline 的方差}：从 $\mathrm{Var}[\hat g] = \mathbb{E}[\psi^2 G^2] - (\mathbb{E}[\psi G])^2$ 出发，
+    用独立性 (i) 把 $\mathbb{E}[\psi^2 G^2] = \mathbb{E}[\psi^2]\,\mathbb{E}[G^2]$ 拆开，
+    用 (ii)(iii) 证明
+    \[
+    \mathrm{Var}[\hat g] = I \cdot \mathbb{E}[G^2] = I\,(\sigma^2 + \mu^2).
+    \]
+    （提示：$\mathbb{E}[G^2] = \mathrm{Var}[G] + (\mathbb{E}[G])^2$；又 $\mathbb{E}[\psi G] = \mathbb{E}[\psi]\mathbb{E}[G] = 0$。）
+    
+    \item \textbf{有 baseline 的方差}：把 $G$ 换成 $G - b$ 重复 (b)，证明
+    \[
+    \mathrm{Var}[\hat g_b] = I\,\big(\sigma^2 + (\mu - b)^2\big).
+    \]
+    
+    \item \textbf{最优 baseline}：把 (c) 看成关于 $b$ 的二次函数，求使方差最小的 $b^*$。
+    应得到 $b^* = \mu = V$（即状态值函数）。代回 (c) 得最小方差 $\mathrm{Var}[\hat g_{b^*}] = I\sigma^2$。
+    
+    \item \textbf{数值感受}：取 $\mu = 100$, $\sigma = 10$, $I = 1$。
+    计算：无 baseline 的方差、最优 baseline（$b^* = 100$）的方差、以及方差\textbf{降低的倍数}。
+    （这解释了讲义里"方差降低上百倍"的现象。）
+\end{enumerate}
+\begin{topicbox}
+deepRL §4.2：baseline 与方差缩减；最优 baseline $\approx V$
+\end{topicbox}
+\begin{takeaway}
+(d) 推出的 $b^* = V(s)$ 是 Actor-Critic 的\textbf{全部理论依据}：
+Critic 之所以学状态值函数 $V$，就是因为 $V$ 是最优 baseline。\\
+用 $A(s,a) = Q(s,a) - V(s)$ 替换 $Q$，相当于把梯度信号\textbf{零均值化}——
+只保留"这个动作比平均\textbf{好多少}"，丢掉与动作无关的公共项 $V$。
+(e) 中"方差降 101 倍"就是这个零均值化的威力。\\
+\textit{一句话追问}：为什么 baseline 只能依赖状态 $s$、不能依赖动作 $a$？（提示：否则 (a) 中"期望不变"会被破坏。）
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[Q-learning vs SARSA：手算更新]
+设环境有 2 个状态 $\{s_1, s_2\}$，每个状态有 2 个动作 $\{a_1, a_2\}$。初始 $Q$ 表全 0。学习率 $\alpha = 0.5$，$\gamma = 0.9$。当前样本：
+\[
+(s_t, a_t, r_t, s_{t+1}, a_{t+1}) = (s_1,\ a_1,\ 1,\ s_2,\ a_2).
+\]
+假设我们\textbf{已经}知道 $Q(s_2, a_1) = 2$, $Q(s_2, a_2) = 1$（其他为 0）。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 写出 SARSA 的更新公式
+    $Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha [r_t + \gamma Q(s_{t+1}, a_{t+1}) - Q(s_t, a_t)]$，
+    代入数值计算 SARSA 更新后的 $Q(s_1, a_1)$。
+    \item 写出 Q-learning 的更新公式
+    $Q(s_t, a_t) \leftarrow Q(s_t, a_t) + \alpha [r_t + \gamma \max_{a'} Q(s_{t+1}, a') - Q(s_t, a_t)]$，
+    代入数值计算 Q-learning 更新后的 $Q(s_1, a_1)$。
+    \item (a)(b) 的结果应当不同——具体相差多少？解释为什么 Q-learning 给出更大的更新：
+    SARSA 用的"下一动作"是 $a_{t+1} = a_2$（$Q$ 值较小），
+    Q-learning 用的是 $\arg\max_{a'} Q(s_2, a')$（即 $a_1$，$Q$ 值较大）。
+    \item 这两个算法分别是 on-policy 还是 off-policy？用一句话说明理由。
+\end{enumerate}
+\begin{topicbox}
+lecture12 §9：TD control（SARSA 与 Q-learning）
+\end{topicbox}
+\begin{takeaway}
+一个 $\max$ 的差别，造就了两种本质不同的算法：\\
+\textbf{SARSA}（on-policy）：用实际采的下一动作 $a_{t+1}$ → 评估的是\textbf{行为策略本身}（含探索的 $\epsilon$-greedy）。\\
+\textbf{Q-learning}（off-policy）：用 $\max_{a'}$ → 评估的是\textbf{贪婪策略} → 直接学 $Q^*$，与你用什么探索策略无关。\\
+经典的"悬崖行走"现象：Q-learning 学到贴悬崖的最短路（最优但训练中常摔下去），SARSA 学到绕远的安全路（次优但稳）。\\
+\textit{延伸}：Q-learning 的 $\max$ 还会带来\textbf{系统性过估计}（总是高估 $Q$），这正是 Double Q-learning 要修的问题。
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[策略梯度定理的 log-trick]
+策略梯度定理写作
+$\nabla_\theta J(\theta) = \mathbb{E}_{s \sim d^\pi, a \sim \pi_\theta}[\nabla_\theta \log \pi_\theta(a|s) \cdot Q^\pi(s,a)]$。
+其中"$\nabla_\theta \log \pi$"是 log-trick 的产物。按以下步骤理解：
+
+\begin{enumerate}[label=(\alph*)]
+    \item 设 $f(\theta) > 0$ 是可微函数。证明 $\nabla_\theta \log f(\theta) = \nabla_\theta f(\theta) / f(\theta)$（用链式法则）。
+    \item 把 (a) 应用到 $f = \pi_\theta(a|s)$，得到
+    $\nabla_\theta \pi_\theta(a|s) = \pi_\theta(a|s) \cdot \nabla_\theta \log \pi_\theta(a|s)$。
+    \item 考虑期望 $\mathbb{E}_{a \sim \pi_\theta}[h(a)] = \sum_a \pi_\theta(a|s) h(a)$。
+    对 $\theta$ 求导（$h$ 不依赖 $\theta$）：
+    $\nabla_\theta \mathbb{E}[h(a)] = \sum_a \nabla_\theta \pi_\theta(a|s) \cdot h(a)$。
+    \item 把 (b) 代入 (c)：得到
+    $\nabla_\theta \mathbb{E}_{a \sim \pi_\theta}[h(a)] = \mathbb{E}_{a \sim \pi_\theta}[\nabla_\theta \log \pi_\theta(a|s) \cdot h(a)]$。
+    这就是 log-trick：原本写不出的"$\nabla$ 一个抽样分布的期望"被转化为可采样估计的形式。
+    \item \textbf{对比}：为什么不直接用 $\nabla \pi / \pi$ 而要用 $\nabla \log \pi$？
+    （提示：考虑当 $\pi(a|s)$ 趋近 0 时数值稳定性。）
+    \item \textbf{手算一个真实的 score function}：考虑 softmax 策略
+    $\pi_\theta(a) = \dfrac{e^{\theta_a}}{\sum_b e^{\theta_b}}$（$3$ 个动作）。
+    对 $\log \pi_\theta(a) = \theta_a - \log\sum_b e^{\theta_b}$ 关于 $\theta_c$ 求偏导，证明
+    \[
+    \frac{\partial \log \pi_\theta(a)}{\partial \theta_c} = \mathbb{1}[a = c] - \pi_\theta(c),
+    \qquad\text{即}\qquad
+    \nabla_\theta \log \pi_\theta(a) = e_a - \pi,
+    \]
+    其中 $e_a$ 是第 $a$ 个标准基向量，$\pi = (\pi_1, \pi_2, \pi_3)^\top$。
+    （提示：$\frac{\partial}{\partial\theta_c}\log\sum_b e^{\theta_b} = \frac{e^{\theta_c}}{\sum_b e^{\theta_b}} = \pi_c$。）
+    \item \textbf{代数值验证零均值}：取 $\pi = (0.5, 0.3, 0.2)$。
+    写出三个动作各自的 score 向量 $e_1 - \pi,\ e_2 - \pi,\ e_3 - \pi$，
+    然后验证 $\mathbb{E}_{a\sim\pi}[\nabla\log\pi] = \sum_a \pi_a (e_a - \pi) = 0$（逐分量算）。
+\end{enumerate}
+\begin{topicbox}
+deepRL §3.2：策略梯度定理与 log-trick；softmax 的 score function
+\end{topicbox}
+\begin{takeaway}
+log-trick 解决了一个根本困难：我们想优化 $J(\theta) = \mathbb{E}_{a \sim \pi_\theta}[\cdots]$，
+但\textbf{分布本身依赖 $\theta$}——"对一个随 $\theta$ 变化的采样分布求梯度"无法直接采样。
+(d) 的恒等式把它变成\textbf{对同一分布的期望}，于是可采样估计——
+\textbf{这是所有策略梯度算法（REINFORCE、A2C、TRPO、PPO）的前提}。\\
+而 (f) 算出的 $\nabla\log\pi = e_a - \pi$ 是一个\textbf{反复出现的核心公式}：它就是"把被选中的动作往上推、其余按概率往下压"。
+它还直接构成 Fisher 信息 $F = \mathbb{E}[(e_a-\pi)(e_a-\pi)^\top] = \mathrm{diag}(\pi) - \pi\pi^\top$，
+以及 DPO 的梯度。(g) 验证的 $\mathbb{E}[\nabla\log\pi] = 0$ 正是题 4 中 baseline 不改变期望的根源。
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[GAE 的几何级数化简]
+回忆 TD 误差 $\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$（题 3、题 4 都见过）。
+把若干个 $\delta$ 累加，就得到 \textbf{$n$ 步优势估计}
+$\hat A_t^{(n)} = \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}$：
+$n$ 越小越像单步 TD（低方差、依赖 $V$），$n$ 越大越像 MC（无偏、高方差）。
+与其在"用几步"上二选一，GAE 干脆把\textbf{所有 $n$ 步估计做一个加权平均}，
+权重按 $\lambda$ 几何衰减（$(1-\lambda)$ 是归一化常数，让权重之和为 1）：
+\[
+\hat A_t^{\mathrm{GAE}(\lambda)} = (1-\lambda) \sum_{n=1}^\infty \lambda^{n-1}\, \hat A_t^{(n)}.
+\]
+这个双重求和看着吓人，但能化简成一个极简洁的单重和。本题就是一步步做这个化简，目标是证明
+\[
+\hat A_t^{\mathrm{GAE}(\lambda)} = \sum_{l=0}^\infty (\gamma\lambda)^l\, \delta_{t+l}.
+\]
+
+\begin{enumerate}[label=(\alph*)]
+    \item 把 $\hat A_t^{(n)} = \sum_{l=0}^{n-1}\gamma^l\delta_{t+l}$ 代入上面 GAE 的定义，写出双重求和形式：
+    \[
+    \hat A_t^{\mathrm{GAE}(\lambda)} = (1-\lambda)\sum_{n=1}^\infty \lambda^{n-1} \sum_{l=0}^{n-1} \gamma^l \delta_{t+l}.
+    \]
+    \item \textbf{交换求和顺序}：对每个固定的 $l$，问 $\delta_{t+l}$ 出现在哪些 $n$ 项里？
+    （答：$n - 1 \ge l$，即 $n \ge l+1$。）
+    交换后变成：
+    \[
+    \hat A_t^{\mathrm{GAE}(\lambda)} = (1-\lambda)\sum_{l=0}^\infty \gamma^l \delta_{t+l} \sum_{n=l+1}^\infty \lambda^{n-1}.
+    \]
+    \item 计算内层几何级数 $\sum_{n=l+1}^\infty \lambda^{n-1}$。
+    （提示：设 $m = n-1$，求 $\sum_{m=l}^\infty \lambda^m = \lambda^l / (1-\lambda)$。）
+    \item 代入 (b) 化简，得到 $\hat A_t^{\mathrm{GAE}(\lambda)} = \sum_{l=0}^\infty (\gamma\lambda)^l \delta_{t+l}$。
+    \item \textbf{极限检查}：把 $\lambda = 0$ 和 $\lambda = 1$ 代入这个简洁形式，分别得到什么？是否与 TD(0) 误差和 MC 残差对应？
+\end{enumerate}
+\begin{topicbox}
+deepRL §4.3：GAE 的简洁形式
+\end{topicbox}
+\begin{takeaway}
+GAE 用一个旋钮 $\lambda$ 把题 3 里 MC 与 TD 的两个极端\textbf{连续连接}起来：\\
+$\lambda = 0$ → $\hat A = \delta_t$（单步 TD，低方差高偏差）；
+$\lambda = 1$ → $\hat A = G_t - V(s_t)$（MC 残差，无偏高方差）。\\
+化简后的 $\sum_l (\gamma\lambda)^l \delta_{t+l}$ 极其优雅：$\gamma\lambda$ 是一个\textbf{统一的有效衰减率}，
+而且可以从后往前一次遍历 $O(T)$ 算完。\\
+\textit{为什么重要}：PPO 默认 $\lambda \approx 0.95$，就是在偏差和方差之间取一个甜点——
+这是把 RL 理论直接落到工程默认值的典型例子。
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[手算 PPO-Clip]
+设 $\epsilon = 0.2$，故 clip 区间为 $[0.8, 1.2]$。对下表中每个样本，按 $L^{\mathrm{CLIP}} = \min(rA,\ \mathrm{clip}(r, 0.8, 1.2) \cdot A)$ 计算目标值。
+
+\begin{center}
+\begin{tabular}{c|c|c|c|c|c}
+\toprule
+样本 & $r$ & $A$ & $rA$ & $\mathrm{clip}(r) \cdot A$ & $L^{\mathrm{CLIP}}$ \\
+\midrule
+1 & 1.5 & +2 & ? & ? & ? \\
+2 & 0.6 & +1 & ? & ? & ? \\
+3 & 1.5 & $-1$ & ? & ? & ? \\
+4 & 0.5 & $-2$ & ? & ? & ? \\
+5 & 1.0 & +1 & ? & ? & ? \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{enumerate}[label=(\alph*)]
+    \item 填完表格中每一格。
+    \item 对每个样本，回答：clipping 是\textbf{激活}（实际改变了目标）还是\textbf{未激活}？
+    \item 观察规律——总结：什么时候 clip 会激活？
+    （提示：分 $A > 0$ 和 $A < 0$ 两种情况。$A > 0$ 时 $r$ 落在哪侧会被 clip？$A < 0$ 时呢？）
+    \item 对样本 1（$r = 1.5, A = +2$，$L^{\mathrm{CLIP}} = 2.4$）：如果继续增大 $r$ 到 $r = 2$，目标 $L^{\mathrm{CLIP}}$ 会变化吗？说明梯度 $\partial L^{\mathrm{CLIP}}/\partial r$ 在 $r > 1+\epsilon$ 区域等于多少。
+\end{enumerate}
+\begin{topicbox}
+PPOwithFriends §4：PPO-Clip 目标函数
+\end{topicbox}
+\begin{takeaway}
+Clip 的本质：当策略更新\textbf{过激}（$r$ 跑出 $[1-\epsilon, 1+\epsilon]$）时，
+目标函数被"压平"，梯度变为零（题 (d)）——于是策略\textbf{不会一步走太远}。\\
+这等价于一个\textbf{隐式的 KL 约束}，但不需要真的计算 KL、不需要二阶信息（对比 TRPO 要解 $F^{-1}g$）。
+正是这个"廉价又有效"的技巧让 PPO 成为最常用的 RL 算法。\\
+\textit{一句话追问}：为什么用 $\min$ 而不是直接 clip？（提示：$\min$ 保证 clip 只在"对自己有利的方向"生效，是个保守的下界。）
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[GRPO 的相对优势与零均值性]
+GRPO 对每个 prompt $x$ 采样 $G$ 个回答 $\{y_1, \ldots, y_G\}$，奖励 $R_i = R(x, y_i)$。
+定义 $\bar R = \frac{1}{G}\sum_j R_j$, $\sigma_R = \sqrt{\frac{1}{G}\sum_j (R_j - \bar R)^2}$，相对优势 $\hat A_i = (R_i - \bar R)/\sigma_R$。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 给定数据 $G = 4, R = (0.8, 0.6, 0.9, 0.5)$，手算 $\bar R, \sigma_R$，再算每个 $\hat A_i$。
+    （参考：$\bar R = 0.7, \sigma_R = \sqrt{0.025} \approx 0.158$。）
+    \item 验证 $\sum_i \hat A_i = 0$。（提示：$\sum_i (R_i - \bar R) = \sum_i R_i - G \bar R = G\bar R - G\bar R = 0$。）
+    \item \textbf{为什么"群体平均"是合理的 baseline}：
+    解释 $\bar R$ 可以视为 $V(x) = \mathbb{E}_{y \sim \pi}[R(x, y)]$ 的 \textbf{蒙特卡罗估计}。
+    用一句话说明 $\mathbb{E}[\bar R] = V(x)$ 成立。
+    \item \textbf{与 PPO 的对比}：PPO 用 critic 网络 $V_\phi(s)$ 给 advantage，
+    GRPO 用群体均值 $\bar R$ 给 advantage。
+    分别列出两种做法各自的优缺点（建议每项 1 行）：
+    \begin{itemize}
+        \item 训练成本（需要训额外网络吗？）
+        \item 样本效率（每个 prompt 需要采多少个 $y$？）
+        \item 适用任务（小模型 vs LLM）
+    \end{itemize}
+\end{enumerate}
+\begin{topicbox}
+PPOwithFriends §9：GRPO 与 critic-free 策略优化
+\end{topicbox}
+\begin{takeaway}
+GRPO 的核心 idea 一句话：\textbf{用"群体平均奖励" $\bar R$ 当 baseline，省掉 critic 网络}。
+对 LLM 来说 critic 是另一个巨大的模型，省掉它能大幅降低显存和训练成本。\\
+而它能成立的理由，和题 4 完全一样——baseline 只要\textbf{不依赖被采的那个动作}就不改变期望的方向，
+而 $\bar R$ 恰好是 $V(x)$ 的无偏蒙特卡罗估计。\\
+\textbf{把题 4 和本题连起来看}：从"最优 baseline = $V$"（理论）→ "用网络估 $V$"（PPO/AC）→ "用群体均值估 $V$"（GRPO），
+是同一个原理在不同算力约束下的三种实现。
+\end{takeaway}
+\end{problem}
+
+\medskip
+
+\begin{problem}[KL 正则化 RL 的闭式解（RLHF 最优策略）]
+RLHF 第二阶段优化的目标是
+\[
+\max_{\pi(\cdot|x)} \mathbb{E}_{y \sim \pi(\cdot|x)}[R(y|x)] - \beta D_{KL}\!\big(\pi(\cdot|x)\,\big\|\,\pi_{\mathrm{ref}}(\cdot|x)\big),
+\]
+满足 $\sum_y \pi(y|x) = 1$。下面用 Lagrange 乘子法求闭式解。
+
+\begin{enumerate}[label=(\alph*)]
+    \item 把 KL 展开：$D_{KL}(\pi \| \pi_{\mathrm{ref}}) = \sum_y \pi(y) \log \frac{\pi(y)}{\pi_{\mathrm{ref}}(y)}$。
+    把目标完整写出（省略 $x$）：
+    \[
+    \max_\pi \sum_y \pi(y) R(y) - \beta \sum_y \pi(y) \log \frac{\pi(y)}{\pi_{\mathrm{ref}}(y)}.
+    \]
+    \item 写出 Lagrangian（带乘子 $\lambda$ 处理归一化约束）：
+    \[
+    \mathcal{L}(\pi, \lambda) = \sum_y \pi(y) R(y) - \beta \sum_y \pi(y) \log \frac{\pi(y)}{\pi_{\mathrm{ref}}(y)} + \lambda\!\left(1 - \sum_y \pi(y)\right).
+    \]
+    \item 对 $\pi(y)$ 求偏导（注意 $\frac{\partial}{\partial \pi(y)} \pi(y) \log \pi(y) = \log \pi(y) + 1$），
+    令其等于零：
+    \[
+    R(y) - \beta \log \pi(y) + \beta \log \pi_{\mathrm{ref}}(y) - \beta - \lambda = 0.
+    \]
+    \item 整理 (c) 解出 $\pi(y)$：
+    \[
+    \pi(y) = \pi_{\mathrm{ref}}(y) \exp\!\left(\frac{R(y) - \beta - \lambda}{\beta}\right)
+    = \pi_{\mathrm{ref}}(y) \cdot e^{-1 - \lambda/\beta} \cdot e^{R(y)/\beta}.
+    \]
+    把前面与 $y$ 无关的常数记为 $1/Z(x)$，得到
+    $\pi^*(y|x) = \frac{1}{Z(x)} \pi_{\mathrm{ref}}(y|x) \exp(R(y|x)/\beta)$。
+    \item 由归一化条件 $\sum_y \pi^*(y|x) = 1$，写出 $Z(x) = \sum_y \pi_{\mathrm{ref}}(y|x) \exp(R(y|x)/\beta)$。
+    \item \textbf{反解 reward}：对 (d) 两边取 $\log$，整理得到
+    \[
+    R(y|x) = \beta \log \frac{\pi^*(y|x)}{\pi_{\mathrm{ref}}(y|x)} + \beta \log Z(x).
+    \]
+    这是 DPO 的关键代换。
+    \item \textbf{手算 $\beta$ 的物理意义}：考虑 2 个回答 $y_1, y_2$，参考策略 $\pi_{\mathrm{ref}} = (0.5, 0.5)$，
+    reward $R(y_1) = 1$, $R(y_2) = 0$。用 $\pi^*(y) \propto \pi_{\mathrm{ref}}(y)\, e^{R(y)/\beta}$
+    分别算 $\beta = 0.1,\ 1,\ 10$ 三种情况下的最优分布 $\pi^*(y_1), \pi^*(y_2)$。
+    （提示：先算未归一化的 $\pi_{\mathrm{ref}}(y_i) e^{R(y_i)/\beta}$，再除以两者之和。
+    例如 $\beta = 1$ 时 $\pi^*(y_1) \propto 0.5 e^{1} = 1.359$, $\pi^*(y_2) \propto 0.5 e^{0} = 0.5$。）
+    \item \textbf{观察规律}：把 (g) 三个 $\beta$ 的结果排在一起。$\beta$ 小时 $\pi^*$ 偏向哪边？$\beta$ 大时呢？
+    用一句话总结 $\beta$ 控制的是什么权衡。
+\end{enumerate}
+\begin{topicbox}
+PPOwithFriends §6.1：RLHF 的闭式最优解（DPO 推导的基础）
+\end{topicbox}
+\begin{takeaway}
+$\pi^*(y|x) \propto \pi_{\mathrm{ref}}(y|x)\, e^{R(y|x)/\beta}$ 是\textbf{整个对齐领域的根公式}——
+RLHF、DPO、以及讲义里所有 PO 方法都从它派生。(g)(h) 让你\textbf{亲眼看到} $\beta$ 是一个旋钮：\\
+\textbf{$\beta$ 小} → $e^{R/\beta}$ 放大 reward 差异 → $\pi^*$ 几乎全压到高 reward 的 $y_1$（对齐强，但易过拟合/遗忘原能力）；\\
+\textbf{$\beta$ 大} → 指数项趋于 1 → $\pi^* \approx \pi_{\mathrm{ref}}$（保守，几乎不动）。\\
+另一层深意：(f) 的反解说明 \textbf{reward 与最优策略一一对应}——策略里已"编码"了 reward，
+所以 DPO 能把这个 $R$ 直接代进 Bradley-Terry、让 $\log Z$ 在差分中消掉，从而\textbf{跳过 reward model}。
+\end{takeaway}
+\end{problem}
+
+\bigskip
+
+%=============================================================================
+\section*{提交要求}
+%=============================================================================
+
+\begin{itemize}
+    \item 每道题按 (a)(b)(c)\ldots\ 顺序写步骤，每步只需 1--3 行。
+    \item 手算/数值题（题 1、2、3、5、8、9，以及题 10 的 (g)(h)）要求写出代入过程，不只是最后数值。
+    \item 推导题（题 4、6、7、10）按提示一步一步走即可，不要跳步。
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,599 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{fontspec}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{mdframed}
+\usepackage{fancyvrb}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,
+  pdftitle={从 TRPO 到 PPO、DPO、GRPO},pdfauthor={RL 后训练讲义}}
+
+% ---- 中文支持(不依赖 xeCJK)----
+\setmainfont{Noto Serif CJK SC}
+\setsansfont{Noto Sans CJK SC}
+\newfontfamily\codefont{Noto Sans Mono CJK SC}
+\XeTeXlinebreaklocale "zh"
+\XeTeXlinebreakskip = 0pt plus 1pt minus 0.1pt
+
+% ---- 数学宏 ----
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\KL}{D_{\mathrm{KL}}}
+\newcommand{\Ap}{A^{\pi}}
+\newcommand{\Vp}{V^{\pi}}
+\newcommand{\Qp}{Q^{\pi}}
+\newcommand{\dpi}{d^{\pi}}
+\newcommand{\dpip}{d^{\pi'}}
+\newcommand{\piref}{\pi_{\mathrm{ref}}}
+\newcommand{\piold}{\pi_{\theta_{\mathrm{old}}}}
+\newcommand{\pith}{\pi_\theta}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\sgn}{sgn}
+\DeclareMathOperator{\clip}{clip}
+\DeclareMathOperator{\KLop}{KL}
+\newcommand{\sig}{\sigma}
+
+% ---- 定理类环境 ----
+\theoremstyle{plain}
+\newtheorem{theorem}{定理}[section]
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{corollary}[theorem]{推论}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{定义}
+\newtheorem{example}[theorem]{例}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{注}
+
+% ---- 高亮盒子 ----
+\newmdenv[linecolor=blue!40!black,linewidth=0.8pt,backgroundcolor=blue!4,
+  roundcorner=4pt,skipabove=8pt,skipbelow=8pt,innertopmargin=6pt,
+  innerbottommargin=6pt]{keybox}
+\newmdenv[linecolor=orange!60!black,linewidth=0.8pt,backgroundcolor=orange!6,
+  roundcorner=4pt,skipabove=8pt,skipbelow=8pt,innertopmargin=6pt,
+  innerbottommargin=6pt]{exbox}
+
+\newcommand{\code}[1]{{\codefont #1}}
+
+\title{\textbf{从 TRPO 到 PPO、DPO、GRPO}\\[4pt]
+\large 大语言模型后训练中的策略优化:一条以「期望换分布」为线索的推导}
+\author{研究生强化学习课程讲义}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+本讲把现代 LLM 后训练的四个主流算法——TRPO、PPO、DPO、GRPO——放在同一个框架下推导。
+贯穿全篇的核心观点有两条。其一,它们优化的是\textbf{同一个 KL 正则目标},都在参考策略附近的
+KL 邻域里寻找回报最高的策略,有同一个解析最优解。其二,所有的技术差异都可以归结为对\textbf{一个期望}
+的不同处理:这个期望本该在新策略的状态--动作分布下取,但我们手里只有旧(参考)策略的数据,于是需要
+\emph{换分布}——TRPO 用信任域控制换分布的代价,PPO 把硬约束换成裁剪,DPO 干脆解析地把「找最优策略」
+变成监督学习而不再采样,GRPO 则回到在线策略梯度但用组内蒙特卡洛基线替掉价值网络。我们尽量把每个期望
+写成显式的「时间$\times$状态$\times$动作」三层求和,并用小规模数字算例验证关键等式。
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+% ==========================================================
+\section{统一视角:在参考策略的 KL 邻域里找最优}
+% ==========================================================
+
+四个算法表面差别很大——TRPO/PPO 要在线采样、要奖励模型,DPO 只在静态偏好数据上做监督学习,
+GRPO 介于其间——但它们优化的目标可以写成同一个式子。给定提示分布 $\mathcal{D}$、奖励 $r(x,y)$
+和参考策略 $\piref$(通常是 SFT 模型),\textbf{KL 正则的策略优化目标}为
+\begin{equation}\label{eq:kl-obj}
+\max_{\pi}\;\; \E_{x\sim\mathcal{D}}\,\E_{y\sim\pi(\cdot\mid x)}\big[r(x,y)\big]
+\;-\;\beta\,\E_{x\sim\mathcal{D}}\big[\KL\big(\pi(\cdot\mid x)\,\|\,\piref(\cdot\mid x)\big)\big].
+\end{equation}
+第一项要回报高,第二项把策略拉住、不许离 $\piref$ 太远;$\beta$ 控制邻域半径。
+
+\begin{theorem}[KL 正则目标的最优解]\label{thm:gibbs}
+对固定的 $x$,目标 \eqref{eq:kl-obj} 的最优策略为玻尔兹曼(Gibbs)形式
+\begin{equation}\label{eq:pi-star}
+\pi^\star(y\mid x)=\frac{1}{Z(x)}\,\piref(y\mid x)\,\exp\!\Big(\tfrac{1}{\beta}r(x,y)\Big),
+\qquad Z(x)=\sum_{y}\piref(y\mid x)\exp\!\Big(\tfrac{1}{\beta}r(x,y)\Big).
+\end{equation}
+\end{theorem}
+\begin{proof}
+固定 $x$,把目标看成关于分布 $\pi(\cdot\mid x)$ 的泛函,加上归一化约束 $\sum_y\pi=1$ 的拉格朗日乘子 $\lambda$:
+\[
+\mathcal{L}=\sum_y \pi(y)\,r(y)-\beta\sum_y\pi(y)\log\frac{\pi(y)}{\piref(y)}+\lambda\Big(\sum_y\pi(y)-1\Big).
+\]
+对 $\pi(y)$ 求偏导并令其为零:$r(y)-\beta\big(\log\frac{\pi(y)}{\piref(y)}+1\big)+\lambda=0$,
+解得 $\pi(y)\propto \piref(y)\exp(r(y)/\beta)$,归一化即得 \eqref{eq:pi-star}。二阶项 $-\beta/\pi(y)<0$ 保证是极大。
+\end{proof}
+
+\begin{keybox}
+\textbf{一句话主线.} 式 \eqref{eq:pi-star} 就是「以 $\piref$ 为中心、被奖励指数加权拉偏」的分布。
+$\beta\to\infty$ 贴死参考策略,$\beta\to 0$ 纯追奖励。\textbf{所有四个算法都是在求这个 $\pi^\star$,
+区别只在求解方式}:PPO/GRPO 用策略梯度在邻域里\emph{爬};DPO 注意到 \eqref{eq:pi-star} 可以反解出奖励,
+于是\emph{解析地}把问题变成监督学习。
+\end{keybox}
+
+后文统一约定记号(单步 MDP 或 token 级序贯 MDP 通用):状态 $s$、动作 $a$、策略 $\pi(a\mid s)$、
+转移 $P(s'\mid s,a)$、折扣 $\gamma$、初始分布 $\rho_0$。价值与优势
+\[
+\Vp(s)=\E_{a\sim\pi}[\Qp(s,a)],\quad
+\Qp(s,a)=r(s,a)+\gamma\E_{s'\sim P}[\Vp(s')],\quad
+\Ap(s,a)=\Qp(s,a)-\Vp(s).
+\]
+性能指标 $J(\pi)=\E_{s_0\sim\rho_0}[\Vp(s_0)]=\E_{\tau\sim\pi}[\sum_t\gamma^t r(s_t,a_t)]$。
+
+\begin{remark}[一切期望都是三层求和]
+本讲反复出现形如 $\E_{s\sim d,\,a\sim\pi}[f]$ 的期望。请始终把它读成显式的三层结构
+\[
+\E_{s\sim d,\,a\sim\pi}[f]
+=\underbrace{\sum_t\gamma^t}_{\text{时间}}\;
+\underbrace{\sum_{s_t}P_t(s_t)}_{\text{谁的访问分布}}\;
+\underbrace{\sum_{a_t}\pi(a_t\mid s_t)}_{\text{谁选动作}}\;f(s_t,a_t),
+\]
+其中折扣访问分布 $d(s)=(1-\gamma)\sum_t\gamma^t P_t(s)$ 把前两层打包成一个概率分布,
+那个常数 $1/(1-\gamma)$ 就是它的归一化因子。读任何一个期望,只需问三句:\emph{时间折扣是 $\gamma^t$;
+状态分布是谁的(谁在走);动作分布是谁的(谁在选)}。
+\end{remark}
+
+% ==========================================================
+\section{TRPO:用信任域控制「换分布」的代价}
+% ==========================================================
+
+TRPO 要回答两个问题:(1) 如何保证 $\pi\to\pi'$ 确实更好?(2) 如何只用旧策略 $\pi$ 的数据评估新策略 $\pi'$?
+答案的骨架是:写出精确的性能差,发现它需要新策略的数据;于是分两步把期望「换」到旧策略上;换分布有代价,
+代价由 KL 信任域控制。
+
+\subsection{Performance Difference Lemma}
+
+\begin{lemma}[Performance Difference Lemma, Kakade--Langford 2002]\label{lem:pdl}
+对任意两个策略 $\pi,\pi'$,
+\begin{equation}\label{eq:pdl}
+J(\pi')-J(\pi)=\frac{1}{1-\gamma}\,\E_{s\sim \dpip,\,a\sim\pi'}\big[\Ap(s,a)\big].
+\end{equation}
+\end{lemma}
+
+证明的核心是一个对任意轨迹都成立的望远镜(telescoping)恒等式。
+
+\begin{keybox}
+\textbf{望远镜恒等式.} 沿任意一条轨迹 $(s_0,a_0,s_1,a_1,\dots)$,
+\begin{equation}\label{eq:telescope}
+\sum_t \gamma^t \Ap(s_t,a_t)=\underbrace{\sum_t\gamma^t r(s_t,a_t)}_{\text{这条轨迹的折扣回报}}-\;\Vp(s_0).
+\end{equation}
+即「旧策略优势沿轨迹的折扣和」恰等于「实际回报减去起点处旧策略的预期回报」。
+\end{keybox}
+
+\begin{proof}[式 \eqref{eq:telescope} 的证明]
+用 $\Ap=\Qp-\Vp$ 与 $\Qp(s_t,a_t)=r(s_t,a_t)+\gamma\Vp(s_{t+1})$(在轨迹上无偏)展开:
+\[
+\sum_t\gamma^t\Ap(s_t,a_t)=\sum_t\gamma^t\big[r(s_t,a_t)+\gamma\Vp(s_{t+1})-\Vp(s_t)\big].
+\]
+价值项 $\sum_t[\gamma^{t+1}\Vp(s_{t+1})-\gamma^t\Vp(s_t)]$ 首尾相消,只剩 $-\Vp(s_0)$,即得 \eqref{eq:telescope}。
+\end{proof}
+
+\begin{proof}[引理 \ref{lem:pdl} 的证明]
+对 $\pi'$ 生成的轨迹取期望:\eqref{eq:telescope} 左边 $=\E_{\tau\sim\pi'}[\sum_t\gamma^t\Ap]$;
+右边 $=\E_{\tau\sim\pi'}[\sum_t\gamma^t r]-\E_{s_0\sim\rho_0}[\Vp(s_0)]=J(\pi')-J(\pi)$。
+再把「沿 $\pi'$ 轨迹的折扣求和」用访问分布 $\dpip$ 写成 $\frac{1}{1-\gamma}\E_{s\sim\dpip,a\sim\pi'}[\Ap]$ 即可。
+\end{proof}
+
+\begin{exbox}
+\textbf{例 2.1(望远镜的数字验证).} 取 $\gamma=0.9$,一条 $\pi'$ 走出的轨迹 $s_0\to s_1\to s_2$(终止)。
+给定旧策略价值 $\Vp(s_0)=10,\ \Vp(s_1)=5,\ \Vp(s_2)=0$,实际奖励 $r_0=8,\ r_1=4$。逐步优势
+\[
+\Ap(s_0,a_0)=8+0.9\cdot5-10=+2.5,\qquad \Ap(s_1,a_1)=4+0.9\cdot0-5=-1.0.
+\]
+左边 $\sum_t\gamma^t\Ap=2.5+0.9\cdot(-1.0)=1.6$;右边折扣回报 $8+0.9\cdot4=11.6$,减 $\Vp(s_0)=10$ 得 $1.6$。
+两边一致。含义:这条 $\pi'$ 轨迹比「从 $s_0$ 按 $\pi$ 本应拿到的 $10$」多挣 $1.6$。
+\end{exbox}
+
+\subsection{纯改进:绕开状态分布的一步}
+
+把 \eqref{eq:pdl} 按「先动作、后状态」嵌套写开:
+\begin{equation}\label{eq:pdl-nest}
+J(\pi')-J(\pi)=\frac{1}{1-\gamma}\sum_s \dpip(s)\,\underbrace{\E_{a\sim\pi'(\cdot\mid s)}[\Ap(s,a)]}_{=:\,h(s)}.
+\end{equation}
+
+\begin{corollary}[策略改进条件]\label{cor:improve}
+若对所有状态 $s$ 都有 $h(s)=\E_{a\sim\pi'(\cdot\mid s)}[\Ap(s,a)]\ge 0$,则 $J(\pi')\ge J(\pi)$。
+\end{corollary}
+\begin{proof}
+\eqref{eq:pdl-nest} 中权重 $\dpip(s)\ge 0$(它是概率)。若被加权的 $h(s)\ge0$,则逐项 $\dpip(s)h(s)\ge0$,
+求和非负,故 $J(\pi')\ge J(\pi)$。
+\end{proof}
+
+\begin{keybox}
+\textbf{为什么这步优雅.} 推论 \ref{cor:improve} \emph{完全不需要知道 $\dpip$ 长什么样}(它最难算)。
+只要 $h(s)$ 逐状态非负,无论非负权重如何分配,加起来都非负——状态分布这个最棘手的部分被直接绕开了。
+这正是策略迭代单调改进的理论根基。代价是条件太强(要在\emph{每个}状态都不变差),实践做不到,
+所以 TRPO 退而求其次:不要求逐状态非负,改成「最大化加权和」并用 KL 锁住近似有效性。
+\end{keybox}
+
+\subsection{两步换分布:代理目标}
+
+\begin{definition}[代理目标]
+\begin{equation}\label{eq:surrogate}
+L_\pi(\pi')=J(\pi)+\frac{1}{1-\gamma}\,\E_{s\sim \dpi,\,a\sim\pi'}\big[\Ap(s,a)\big].
+\end{equation}
+注意状态分布已由 $\dpip$ 换成 $\dpi$(旧策略,我们有数据),动作分布仍是 $\pi'$。
+\end{definition}
+
+\textbf{第一步(换状态,付近似误差).}\ 把 \eqref{eq:pdl} 里的 $\dpip$ 换成 $\dpi$,等价于假设 $\dpip\approx\dpi$。
+这是 TRPO 唯一的「硬」近似,仅当 $\pi'\approx\pi$ 时成立。
+
+\textbf{第二步(换动作,精确,付方差).}\ 用重要性采样把动作期望也搬到 $\pi$ 上,记 $\rho(a\mid s)=\pi'(a\mid s)/\pi(a\mid s)$:
+\begin{equation}\label{eq:is}
+\E_{a\sim\pi'(\cdot\mid s)}[\Ap]=\E_{a\sim\pi(\cdot\mid s)}\big[\rho(a\mid s)\,\Ap\big]
+\;\Longrightarrow\;
+L_\pi(\pi')=J(\pi)+\frac{1}{1-\gamma}\E_{s\sim\dpi,\,a\sim\pi}\big[\rho\,\Ap\big].
+\end{equation}
+这一步是\emph{精确}恒等式(IS 无偏),不是近似;但 $\pi'$ 离 $\pi$ 越远,$\rho$ 越极端,估计方差越大。
+到这里状态与动作\textbf{全是旧策略的},完全可用旧数据估计——这才是 TRPO 真正去最大化的目标。
+
+\begin{lemma}[代理目标与真目标在 $\pi$ 处一阶吻合]
+$L_\pi(\pi)=J(\pi)$,且 $\nabla_{\pi'}L_\pi(\pi')\big|_{\pi'=\pi}=\nabla_{\pi'}J(\pi')\big|_{\pi'=\pi}$。
+\end{lemma}
+\begin{proof}[要点]
+对 $\pi'$ 求导时,真目标 $J$ 含两项:状态分布变化项(I)与动作分布变化项(II)。在 $\pi'=\pi$ 处,(I) 的系数
+$h(s)=\E_{a\sim\pi}[\Ap(s,a)]=0$(优势在 $\pi$ 下均值为零),故 (I) 消失;(II) 恰是 $\nabla L_\pi$。
+所以代理目标「扔掉」的正是状态分布变化项,而它在 $\pi$ 处因 $\E_\pi[\Ap]=0$ 而无害——这就是一阶吻合的来源。
+\end{proof}
+
+\begin{exbox}
+\textbf{例 2.2(两步换分布的数字验证).}\ 单状态、三动作。旧策略 $\pi=(0.5,0.3,0.2)$,优势 $\Ap=(0.6,0,-1.5)$
+(满足 $\E_{a\sim\pi}[\Ap]=0.5\cdot0.6+0.2\cdot(-1.5)=0$)。新策略把质量挪向优势动作:$\pi'=(0.7,0.3,0)$。
+\begin{itemize}[topsep=2pt,itemsep=1pt]
+\item \emph{纯改进 $h$:} $h=0.7\cdot0.6+0.3\cdot0+0\cdot(-1.5)=+0.42\ge0$,本状态改进。
+\item \emph{直接用 $\pi'$:} $\E_{a\sim\pi'}[\Ap]=0.42$。
+\item \emph{重要性采样:} $\rho=\pi'/\pi=(1.4,1.0,0)$,$\E_{a\sim\pi}[\rho\Ap]=0.5\cdot1.4\cdot0.6+0+0=0.42$。
+\end{itemize}
+两种算法都得 $0.42$,印证 \eqref{eq:is} 的精确性。覆盖要求也清晰:若某 $\pi(a)=0$ 而 $\pi'(a)>0$,
+$\rho=\text{正}/0$ 发散——旧策略没采到的动作 IS 无法估计。
+\end{exbox}
+
+\begin{exbox}
+\textbf{例 2.3(换状态的代价).}\ 两状态。设 $\dpi=(0.6,0.4)$、$\dpip=(0.3,0.7)$,每状态优势均值
+$h(s_1)=+0.4,\ h(s_2)=-0.2$,$\gamma=0.9$($1/(1-\gamma)=10$)。
+\[
+\text{精确(用 $\dpip$):}\ 0.3\cdot0.4+0.7\cdot(-0.2)=-0.02,\quad
+\text{代理(用 $\dpi$):}\ 0.6\cdot0.4+0.4\cdot(-0.2)=+0.16.
+\]
+真实 $\Delta J\approx10\cdot(-0.02)=-0.2$(其实变差),代理却预测 $+1.6$(方向都反)。差异来自新策略大量改去访问
+劣势状态 $s_2$($0.4\to0.7$),而这一状态分布漂移完全没被代理目标看到。这正是必须把 KL 锁小、逼 $\dpip\approx\dpi$ 的原因。
+\end{exbox}
+
+\subsection{每个期望在什么意义下算:总表}
+
+\begin{table}[h]\centering\small
+\begin{tabular}{@{}lllll@{}}
+\toprule
+期望 & 状态 $s$ & 动作 $a$ & 评分量 & 可用旧数据估?\\
+\midrule
+PDL(精确)\eqref{eq:pdl} & $\dpip$ 新 & $\pi'$ 新 & $\Ap$ & 否\\
+纯改进 $h(s)$ \eqref{eq:pdl-nest} & 钉死 $s$ & $\pi'$ 新 & $\Ap$ & ——(绕开 $s$ 分布)\\
+代理①换状态 & $\dpi$ 旧 & $\pi'$ 新 & $\Ap$ & 半(近似)\\
+代理② IS \eqref{eq:is} & $\dpi$ 旧 & $\pi$ 旧 & $\rho\,\Ap$ & 是(精确变换)\\
+KL 约束 & $\dpi$ 旧 & —— & 逐状态 KL & 是\\
+$g,F$ & $\dpi$ 旧 & $\pi$ 旧 & $\nabla\log\pi\cdot\Ap$ / 外积 & 是\\
+\bottomrule
+\end{tabular}
+\caption{TRPO 推导中各期望的「意义」。从上到下读,就是「状态新$\to$旧、动作新$\to$旧」被逐格换掉的过程。}
+\end{table}
+
+\subsection{近似界与信任域}
+
+\begin{theorem}[Kakade--Langford 界]
+设 $\epsilon=\max_s|\E_{a\sim\pi'}[\Ap(s,a)]|$,$D^{\max}_{TV}=\max_s D_{TV}(\pi(\cdot\mid s)\|\pi'(\cdot\mid s))$,则
+\begin{equation}\label{eq:klbound}
+J(\pi')\ge L_\pi(\pi')-\frac{4\gamma\epsilon}{(1-\gamma)^2}\big(D^{\max}_{TV}\big)^2
+\;\ge\; L_\pi(\pi')-C\,D^{\max}_{\mathrm{KL}}(\pi\|\pi'),
+\end{equation}
+末步用 Pinsker 不等式 $D_{TV}\le\sqrt{\tfrac12\KL}$。
+\end{theorem}
+
+界的含义:右边是 $J(\pi')$ 的\emph{下界};只要 $\pi'$ 与 $\pi$ 足够接近($\KL$ 小),最大化代理目标
+就能保证真目标改进。这把例 2.2(IS 方差)和例 2.3(状态分布漂移)两个代价同时兜住——二者都随 $\KL$ 增长。
+于是 TRPO 的优化问题为
+\begin{equation}\label{eq:trpo}
+\max_{\theta'}\;L_\theta(\theta')\quad\text{s.t.}\quad
+\E_{s\sim\dpi}\big[\KL\big(\pith(\cdot\mid s)\,\|\,\pi_{\theta'}(\cdot\mid s)\big)\big]\le\delta.
+\end{equation}
+
+\subsection{求解:自然梯度与共轭梯度}
+
+把代理目标一阶展开、KL 约束二阶展开($F$ 为 Fisher 信息矩阵):
+\[
+\max_{\Delta\theta}\;g^\top\Delta\theta\quad\text{s.t.}\quad \tfrac12\Delta\theta^\top F\Delta\theta\le\delta,
+\qquad g=\nabla_\theta L,\quad F=\E_{s\sim\dpi,a\sim\pi}\big[\nabla\log\pith\,\nabla\log\pith^\top\big].
+\]
+用拉格朗日乘子求解(约束取等),得自然梯度方向
+\begin{equation}\label{eq:nat-grad}
+\Delta\theta^\star=\sqrt{\frac{2\delta}{g^\top F^{-1}g}}\;F^{-1}g.
+\end{equation}
+其中 $g=\E_{s\sim\dpi,a\sim\pi}[\nabla\log\pith(a\mid s)\,\Ap(s,a)]$——\textbf{这就是策略梯度},
+$F$ 是 KL 的局部二阶度量;两者都在旧策略数据下估计。神经网络中 $F$ 是 $10^6\times10^6$ 量级,不可显式求逆;
+只需 $F^{-1}g$,用共轭梯度法迭代,每步只算 Fisher--向量乘积 $Fv=\E[\nabla\log\pi(\nabla\log\pi^\top v)]$,
+复杂度 $O(Nd)$,$10$--$20$ 步即足够。
+
+\begin{remark}[TRPO 的代价]
+单调改进保证漂亮,但每步要近似 Fisher、跑共轭梯度、再做线搜索,工程繁重。PPO 的全部动机就是
+\emph{用一个一阶、无约束、可直接 SGD 的目标}近似这套信任域机制。
+\end{remark}
+
+% ==========================================================
+\section{PPO:把信任域换成裁剪}
+% ==========================================================
+
+TRPO 的 \eqref{eq:trpo} 用一个二次 KL 约束界定信任域,求解要算 Fisher、跑共轭梯度。PPO 的思想是:
+不显式约束 KL,而是直接\textbf{在目标函数里裁剪重要性比率},让策略一旦偏离太远就\emph{停止从该方向继续获益}——
+用一阶、无约束、可直接 SGD 的目标近似信任域。
+
+\subsection{裁剪代理目标}
+
+记 token(或单步)级比率 $\rho_t(\theta)=\dfrac{\pith(a_t\mid s_t)}{\piold(a_t\mid s_t)}$,优势估计 $\hat A_t$(通常用 GAE)。PPO-Clip 最大化
+\begin{equation}\label{eq:ppo-clip}
+L^{\mathrm{CLIP}}(\theta)=\E_t\Big[\min\big(\rho_t\hat A_t,\;\clip(\rho_t,1-\varepsilon,1+\varepsilon)\,\hat A_t\big)\Big].
+\end{equation}
+$\min$ 取的是「悲观下界」。它的作用分两种情形:
+
+\begin{itemize}[topsep=2pt,itemsep=1pt]
+\item $\hat A_t>0$(好动作):想推高 $\rho_t$,但一旦 $\rho_t>1+\varepsilon$,$\clip$ 把它压回 $1+\varepsilon$,
+$\min$ 选中被裁项,目标变常数,\textbf{梯度归零}——不再继续推高。
+\item $\hat A_t<0$(坏动作):想压低 $\rho_t$,一旦 $\rho_t<1-\varepsilon$,同理目标变常数、梯度归零——不再继续猛压。
+\end{itemize}
+
+\begin{exbox}
+\textbf{例 3.1(裁剪的数字感受).}\ 取 $\varepsilon=0.2$。
+\begin{center}\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+$\hat A$ & $\rho$ & $\rho\hat A$ & $\clip(\rho)\hat A$ & $\min$ & 裁剪?\\
+\midrule
+$+1$ & $1.35$ & $1.35$ & $1.2$ & $1.20$ & 是(上行被截)\\
+$-1$ & $0.60$ & $-0.60$ & $-0.80$ & $-0.80$ & 是(下行被截)\\
+$-1$ & $0.90$ & $-0.90$ & $-0.90$ & $-0.90$ & 否(信赖域内)\\
+\bottomrule
+\end{tabular}
+\end{center}
+被裁的两行,目标项是常数,$\partial/\partial\theta=0$,该 token 在那个方向上的策略梯度被掐断;
+未裁的一行梯度照常。这就给每个 token 的概率变化套了一个 $[1-\varepsilon,1+\varepsilon]$ 的信赖域。
+\end{exbox}
+
+\begin{remark}[第一个 epoch 裁剪不生效]
+PPO 通常对一份 rollout 做多次小批量更新($\mu>1$)。第一个 epoch 中 $\theta=\theta_{\mathrm{old}}$,
+所有 $\rho_t=1$,$\clip$ 永不触发,此时就是普通策略梯度;只有从第二个 epoch 起 $\theta$ 已动、$\rho_t\ne1$,
+裁剪才有意义。这是「复用昂贵 rollout」与「控制偏移」之间的权衡。
+\end{remark}
+
+\subsection{RLHF 中的 token 级奖励}
+
+把 PPO 用于 LLM 时,MDP 取:状态 $s_t=(x,y_{<t})$、动作 $a_t=y_t$、确定性转移 $s_{t+1}=s_t\oplus a_t$、$\gamma=1$。
+奖励模型 $R(x,y)$ 只在终止符 EOS 给一个\emph{标量},中间 token 没有内容奖励。实际喂给 PPO 的逐 token 奖励为
+\begin{equation}\label{eq:rlhf-reward}
+r_t=-\beta\big(\log\pith(a_t\mid s_t)-\log\piref(a_t\mid s_t)\big)+\underbrace{R(x,y)\cdot\mathbb{1}[t=T]}_{\text{仅最后一个 token}}.
+\end{equation}
+即:每个 token 的奖励几乎全是\textbf{对 $\piref$ 的逐 token KL 惩罚}(防偏移),真正的「好坏」信号是序列级、
+稀疏地加在末尾;再由 GAE 把末尾标量沿轨迹分配回每个 token。这正是 \eqref{eq:kl-obj} 的 $r-\beta\KL$ 目标在 token 级的展开。
+
+% ==========================================================
+\section{DPO:把「找最优策略」解析地变成监督学习}
+% ==========================================================
+
+DPO 的出发点是定理 \ref{thm:gibbs}:既然最优策略 \eqref{eq:pi-star} 把奖励和策略绑定,
+那就\textbf{反解出奖励},代入偏好模型,从而完全跳过「学奖励模型 + 在线 RL」,直接在静态偏好数据上做监督学习。
+
+\subsection{从最优解反解奖励}
+
+对 \eqref{eq:pi-star} 取对数重排:
+\begin{equation}\label{eq:dpo-reparam}
+r(x,y)=\beta\log\frac{\pi^\star(y\mid x)}{\piref(y\mid x)}+\beta\log Z(x).
+\end{equation}
+把它代入 Bradley--Terry 偏好模型 $P(y_w\succ y_l\mid x)=\sig\big(r(x,y_w)-r(x,y_l)\big)$。
+关键:配分函数 $Z(x)$ 只依赖 $x$,在相减时\textbf{抵消}:
+\[
+r(x,y_w)-r(x,y_l)=\beta\log\frac{\pi^\star(y_w\mid x)}{\piref(y_w\mid x)}-\beta\log\frac{\pi^\star(y_l\mid x)}{\piref(y_l\mid x)}.
+\]
+把待求策略 $\pith$ 代替 $\pi^\star$,得到 DPO 的极大似然损失:
+\begin{equation}\label{eq:dpo-loss}
+\mathcal{L}_{\mathrm{DPO}}=-\,\E_{(x,y_w,y_l)}\Big[\log\sig\big(\underbrace{\beta\log\tfrac{\pith(y_w\mid x)}{\piref(y_w\mid x)}-\beta\log\tfrac{\pith(y_l\mid x)}{\piref(y_l\mid x)}}_{=:\,u}\big)\Big].
+\end{equation}
+
+\begin{keybox}
+\textbf{DPO 没有显式奖励、没有采样.}\ 隐式奖励是 $\hat r(x,y)=\beta\log\frac{\pith(y\mid x)}{\piref(y\mid x)}$,
+即「当前策略相对参考策略把多少概率质量挪到了这条回答上」。$\mathcal{L}_{\mathrm{DPO}}$ 与 \eqref{eq:kl-obj} 同解 $\pi^\star$,
+但求解变成了在固定偏好数据上的二分类。
+\end{keybox}
+
+\subsection{梯度与难例加权}
+
+记 $u=\beta(\text{chosen logratio}-\text{rejected logratio})$。损失梯度有干净形式:
+\begin{equation}\label{eq:dpo-grad}
+\nabla_\theta\mathcal{L}_{\mathrm{DPO}}=-\beta\,\underbrace{\sig(-u)}_{\text{难例权重}}\big[\nabla_\theta\log\pith(y_w\mid x)-\nabla_\theta\log\pith(y_l\mid x)\big].
+\end{equation}
+方向是「推高 chosen、压低 rejected」,力度由 $\sig(-u)$ 调制:当前差距小($u$ 小)给近满额梯度,
+差距已拉大($u$ 大)梯度自动趋零——这是 DPO 自带的难例加权。
+
+\begin{exbox}
+\textbf{例 4.1(DPO 一步更新的数字).}\ 设序列级对数概率
+\[
+\text{chosen logratio}=\underbrace{(-1.1)}_{\text{policy}}-\underbrace{(-1.6)}_{\text{ref}}=+0.5,\quad
+\text{rejected logratio}=(-2.0)-(-1.7)=-0.3.
+\]
+则 $\text{logits}=0.5-(-0.3)=0.8$,取 $\beta=0.1$:$u=0.08$,$\mathcal{L}=-\log\sig(0.08)\approx0.654$。
+难例权重 $\sig(-0.08)\approx0.480$,梯度系数 $\beta\cdot0.480=0.048$。隐式奖励
+$\hat r_w=0.1\cdot0.5=+0.05$,$\hat r_l=0.1\cdot(-0.3)=-0.03$,余量 $0.08$。理想化地对每个 token 的 logp
+施加 $\pm0.048$ 一步后(取学习率 $1$ 作示意),chosen 四个 token 之和由 $-1.1$ 升到 $-0.908$,
+rejected 由 $-2.0$ 降到 $-2.192$,新 logits $=1.184>0.8$,损失降到 $\approx0.636$——差距被拉开,方向正确。
+\end{exbox}
+
+\subsection{离线的代价:似然位移}
+
+标准 DPO 的偏好对是\textbf{预先标好的静态数据},与正在更新的 $\pith$ 脱钩(off-policy)。训练后期 $\pith$ 已漂离
+生成偏好数据的分布,chosen/rejected 对当前策略都成了分布外样本,常见后果是 chosen 的概率也被一起压低
+(\emph{likelihood displacement}):DPO 只保证 chosen 比 rejected 高,不保证 chosen 本身被推高。这正是
+「数据与策略脱钩」的代价,也是 Online/Iterative DPO 的动机。
+
+\subsection{同族变体:换 loss 即换方法}
+
+DPO 这一族框架几乎相同(见 \S6),只换损失函数与是否需要参考模型:
+\begin{itemize}[topsep=2pt,itemsep=1pt]
+\item \textbf{IPO:}\ 用平方损失 $(u/\beta-\tfrac12)^2$ 代替 $\log\sig$,缓解过拟合。需要 $\piref$。
+\item \textbf{CPO / SimPO:}\ 去掉 $\piref$(省一个网络)。SimPO 用长度归一化的对数概率加 margin。
+\item \textbf{ORPO:}\ 把 SFT 损失与 odds-ratio 偏好项合并,单阶段完成,无需 $\piref$。
+\item \textbf{KTO:}\ 不需成对偏好,单条回答 + 二值好/坏标签,用前景理论的价值函数。
+\end{itemize}
+
+% ==========================================================
+\section{GRPO:回到在线策略梯度,但用组内基线替价值网络}
+% ==========================================================
+
+GRPO 重新回到在线采样的策略优化(像 PPO),但删掉 critic:不学价值函数 $V_\phi$,
+而用\textbf{对同一提示多次采样的组内平均回报}作为基线。
+
+\subsection{组内归一化优势}
+
+对每个提示 $x$,从当前策略采 $G$ 条回答 $\{y_i\}_{i=1}^G$,各得标量回报 $R_i=R(x,y_i)$
+(可验证奖励或奖励模型)。优势为组内标准化分数:
+\begin{equation}\label{eq:grpo-adv}
+\hat A_i=\frac{R_i-\mathrm{mean}(\{R_j\})}{\mathrm{std}(\{R_j\})+\epsilon}.
+\end{equation}
+从 RL 看,这是把\textbf{同一初始状态 $s_0$ 的 $G$ 条蒙特卡洛回报均值当作基线 $b\approx V(s_0)$}——
+省掉了 critic 网络。因 $\gamma=1$ 且奖励仅在末尾,整条回答的每个 token 共享同一个 $\hat A_i$
+(轨迹级优势,无 token 级信用分配)。
+
+\begin{exbox}
+\textbf{例 5.1(组内优势).}\ 一个提示采 $G=4$ 条,回报 $R=[1,1,0,1]$。$\mathrm{mean}=0.75$,
+$\mathrm{std}=0.5$,故 $\hat A=[+0.5,+0.5,-1.5,+0.5]$。答对的三条每 token 拿 $+0.5$,答错那条每 token 拿 $-1.5$。
+\end{exbox}
+
+\subsection{目标函数}
+
+GRPO 最大化(逐 token)裁剪代理目标减 KL 正则,$\rho_{i,t}=\pith(y_{i,t})/\piold(y_{i,t})$:
+\begin{equation}\label{eq:grpo-obj}
+\mathcal{J}_{\mathrm{GRPO}}=\E\Big[\frac{1}{G}\sum_i\frac{1}{|y_i|}\sum_t
+\Big(\min\big(\rho_{i,t}\hat A_i,\;\clip(\rho_{i,t},1\!-\!\varepsilon,1\!+\!\varepsilon)\hat A_i\big)
+-\beta\,\KLop_{i,t}\Big)\Big],
+\end{equation}
+其中 KL 用 $k_3$ 低方差无偏估计 $\KLop_{i,t}=e^{z^{\mathrm{ref}}-z}-(z^{\mathrm{ref}}-z)-1$,$z=\log\pith$。
+
+\begin{exbox}
+\textbf{例 5.2(裁剪与梯度的逐 token 验证).}\ $\varepsilon=0.2,\beta=0.04$。记 $z_{\mathrm{old}},z,z^{\mathrm{ref}}$ 为旧/当前/参考 logp。
+\begin{center}\small
+\begin{tabular}{@{}lllllll@{}}
+\toprule
+$\hat A$ & $z_{\mathrm{old}}$ & $z$ & $r=e^{z-z_{\mathrm{old}}}$ & $\min$ 选 & $\partial S/\partial z$ & $\partial\mathcal{J}/\partial z$\\
+\midrule
+$+0.5$ & $-0.2$ & $+0.1$ & $1.350$ & 裁剪 & $0$ & $-0.0132$\\
+$-1.5$ & $-0.5$ & $-1.0$ & $0.607$ & 裁剪 & $0$ & $+0.0260$\\
+$-1.5$ & $-0.5$ & $-0.6$ & $0.905$ & 不裁 & $-1.357$ & $-1.353$\\
+\bottomrule
+\end{tabular}
+\end{center}
+其中未裁项 $\partial S/\partial z=r\hat A$,裁剪项 $\partial S/\partial z=0$(只剩 $-\beta\,\partial\KLop/\partial z$,
+$\partial\KLop/\partial z=1-e^{z^{\mathrm{ref}}-z}$)。可见:好 token 涨过 $1+\varepsilon$、坏 token 跌破 $1-\varepsilon$ 时
+策略梯度被掐断,只留微弱 KL 回拉;信赖域内的坏 token($r=0.905$)梯度照常($-1.353$,继续压低)。
+\end{exbox}
+
+\subsection{训练框架:三模型、五阶段}
+
+GRPO 在工程上是「三类模型角色 + 五阶段主循环」(PPO 多一个 critic,共四角色):
+
+\begin{description}[topsep=2pt,itemsep=2pt,leftmargin=1.4em]
+\item[角色] actor $\pith$(唯一更新权重)、ref $\piref$(冻结,算 KL)、reward(函数或 RM);
+\textbf{无 critic / value 网络};另有推理引擎(vLLM 等)做高吞吐采样。
+\item[阶段 1 Rollout] 用当前 actor 权重对每个提示采 $G$ 条 —— on-policy 数据收集。
+\item[阶段 2 Experience] actor / ref 各前向一遍,记录 $\log\piold,\log\piref$;reward 打分,存入 buffer。
+\item[阶段 3 Advantage] 组内归一化 \eqref{eq:grpo-adv} —— 无 critic、无 GAE,纯函数。
+\item[阶段 4 Update] 一份 rollout 复用 $\mu$ 次小批量,按 \eqref{eq:grpo-obj} 更新 actor;
+$\mu>1$ 时 $\rho\ne1$,裁剪生效。
+\item[阶段 5 Weight sync] 把训练好的权重推回推理引擎,否则下一轮仍用旧策略采样。
+\end{description}
+
+\subsection{RL 框架对照}
+
+\begin{table}[h]\centering\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+ & REINFORCE & PPO(actor--critic) & GRPO\\
+\midrule
+基线 $b(s)$ & 常数/滑动均值 & 学到的 critic $V_\phi(s)$ & 组内蒙特卡洛均值\\
+优势 $\Psi_t$ & $R-b$ & GAE(时序信用分配) & $(R-\text{mean})/\text{std}$,token 间常数\\
+第二网络 & 否 & 是(value head) & \textbf{否}\\
+信赖域 & 无 & PPO-clip & PPO-clip\\
+对 $\piref$ 的 KL & 无 & RLHF 版有 & 有\\
+信用分配 & 无 & GAE 沿轨迹 & 无,整条平摊\\
+\bottomrule
+\end{tabular}
+\caption{从 RL 组件看三种方法。GRPO 用「对同一初始状态多次采样取平均」的蒙特卡洛基线替掉了 critic。}
+\end{table}
+
+% ==========================================================
+\section{统一谱系与选型}
+% ==========================================================
+
+把四个算法按「数据是否随策略闭环移动」排开,本质区别一目了然。强化学习区别于监督学习的标志\textbf{不是有没有奖励,
+而是数据分布是否随策略移动(闭环 vs 开环)}。
+
+\begin{keybox}
+\textbf{闭环程度谱系.}
+\[
+\underbrace{\text{标准 DPO}}_{\text{静态数据,开环,监督学习}}
+\ \longrightarrow\
+\underbrace{\text{Iterative DPO}}_{\text{周期重采,半闭环,渐近 RL}}
+\ \longrightarrow\
+\underbrace{\text{GRPO / PPO}}_{\text{策略实时生成,闭环,RL}}
+\]
+\begin{itemize}[topsep=2pt,itemsep=1pt]
+\item \textbf{标准 DPO}:偏好对预先标定、训练全程不变,与 $\pith$ 脱钩 —— 开环,本质是分类,不是 RL。
+\item \textbf{PPO/GRPO}:阶段 1 用最新权重采样、阶段 5 同步权重,数据分布跟着策略走 —— 闭环,是 RL。
+\item \textbf{Iterative DPO}:用 DPO 的损失,但偏好对在线采样 + 现场标注,数据部分跟随策略 —— 正从监督学习滑向 RL。
+\end{itemize}
+\end{keybox}
+
+\textbf{选型.}\ 工程量从左到右递增。能用静态偏好数据就优先 DPO 族(框架约等于 SFT,省掉推理引擎与权重同步整套基建);
+当需要模型自我探索、或只有可验证的终末奖励(数学/代码判对错)而无现成偏好对时,才上 PPO/GRPO 族。
+本质上是在问:\emph{你的数据能不能跟得上策略的移动}。
+
+\begin{table}[h]\centering\small
+\begin{tabular}{@{}llllll@{}}
+\toprule
+方法 & 在线采样 & 奖励模型 & 参考模型 & 数据格式 & 框架复杂度\\
+\midrule
+DPO / IPO & 否 & 否 & 是 & 成对偏好 & $\approx$ SFT\\
+CPO / SimPO / ORPO & 否 & 否 & 否 & 成对偏好 & $\approx$ SFT\\
+KTO & 否 & 否 & 是 & 单条 + 二值 & $\approx$ SFT\\
+Iterative DPO & 是 & RM/judge & 是 & 在线成对 & 中\\
+PPO & 是 & 是 & 是 & 仅提示 & 高(含 critic)\\
+GRPO / RLOO / GSPO & 是 & 是 & 是 & 仅提示 & 高(无 critic)\\
+\bottomrule
+\end{tabular}
+\caption{偏好对齐与策略优化方法的框架对照。}
+\end{table}
+
+\paragraph{延伸方向.}\ (i) 把终末奖励换成\textbf{过程奖励}(PRM,中间 $r_t\ne0$)可恢复 token 级信用分配;
+(ii) \textbf{GSPO} 用序列级重要性比率(在轨迹上聚合 $\rho$)重新定义信赖域作用的粒度;
+(iii) \textbf{VESPO} 等用变分重塑核缓解 off-policy 复用导致的不稳定。它们都在前述统一框架内,只改动其中一个组件。
+
+% ==========================================================
+\section*{习题}
+\addcontentsline{toc}{section}{习题}
+% ==========================================================
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+\item 由定理 \ref{thm:gibbs} 的 $\pi^\star$ 出发,证明此时 \eqref{eq:kl-obj} 第二项 $\KL(\pi^\star\|\piref)$
+与第一项之和等于 $\beta\log Z(x)$ 的期望;据此说明 $Z(x)$ 为何在 DPO 推导中可消去。
+\item 用例 2.1 的轨迹,把 $\gamma$ 改为 $0.5$,重新验证望远镜恒等式 \eqref{eq:telescope}。
+\item 证明:当 $\varepsilon\to0$ 时 PPO-Clip \eqref{eq:ppo-clip} 退化为只在 $\rho_t=1$ 邻域有效的一阶策略梯度;
+当 $\delta\to0$ 时 TRPO \eqref{eq:trpo} 退化为自然梯度下降。
+\item 推导 DPO 梯度 \eqref{eq:dpo-grad},并说明 $\sig(-u)$ 作为难例权重在 $u\to+\infty$ 与 $u\to-\infty$ 两端的行为。
+\item 在例 5.1 中把 $G=4$ 的回报改为 $[1,0,0,0]$,重新计算组内优势 \eqref{eq:grpo-adv},
+并讨论当组内回报全相同时优势退化为何值、对训练有何影响。
+\item (框架题)给定一份固定的人类偏好数据集与有限算力,论证应选 DPO 族还是 GRPO 族,
+从「数据是否随策略闭环」「是否需要推理引擎与权重同步」两个角度分析。
+\end{enumerate}
+
+\end{document}

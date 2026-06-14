@@ -3642,7 +3642,7 @@ Minimax-Q & 纳什均衡 & 两人零和 & $O(\gamma^k)$ \\
 
 \textbf{2.} $\|T^n V - T^n V'\| \leq \gamma\|T^{n-1}V - T^{n-1}V'\| \leq \cdots \leq \gamma^n\|V-V'\|$。
 
-\textbf{3.} $0.99^k < 0.0001$，$k > \frac{\ln 10^6}{\ln(1/0.99)} = \frac{13.8}{0.01} = 1380$次。
+\textbf{3.} $100 \cdot 0.99^k < 0.01$，即$0.99^k < 10^{-4}$，$k > \frac{\ln 10^4}{\ln(1/0.99)} \approx 916.42$，因此至少需要$917$次。
 
 \textbf{4.} $\frac{1}{\sqrt{1-0.95^2}} = \frac{1}{\sqrt{0.0975}} = 3.2$。误差上界$\leq 3.2$。
 

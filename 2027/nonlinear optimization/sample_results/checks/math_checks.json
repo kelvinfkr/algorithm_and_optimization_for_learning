@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "checks": {
+    "kkt": {
+      "max_kkt_and_gap_residual": 0.0,
+      "primal": 0.25,
+      "dual": 0.25
+    },
+    "sgd": {
+      "theoretical_second_moment": 0.8380959999999998,
+      "empirical_second_moment": 0.8379573039279712,
+      "standard_error": 0.0009839429193812697,
+      "absolute_error": 0.00013869607202865453,
+      "interpretation": "A seeded Monte Carlo consistency check, not a proof."
+    },
+    "polar": {
+      "support_function_error": 5.329070518200751e-15,
+      "spectral_norm": 1.0000000000000002,
+      "ns40_frobenius_error": 1.763301828752215e-15
+    },
+    "kernel": {
+      "analytic_vs_autodiff_errors": [
+        2.7755575615628914e-17,
+        2.7755575615628914e-17
+      ],
+      "matched_initial_kernel_error": 0.0
+    },
+    "coordinates": {
+      "max_five_step_coordinate_error": 0.0,
+      "rates": {
+        "raw_a": 0.08,
+        "raw_w": 0.08,
+        "physical_b": 0.005
+      }
+    },
+    "matrix_factorization": {
+      "balance_derivative_residual": 1.0547118733938987e-15,
+      "induced_flow_residual": 4.591346077054629e-15
+    }
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "numpy": "2.3.5",
+    "matplotlib": "3.10.8",
+    "torch": "2.14.1+cpu",
+    "cuda_available": false
+  }
+}

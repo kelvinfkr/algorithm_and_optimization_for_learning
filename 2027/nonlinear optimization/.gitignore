@@ -1,0 +1,15 @@
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.xdv
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+results/
+AUTHORING.md

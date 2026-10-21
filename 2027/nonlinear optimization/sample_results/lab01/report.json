@@ -1,0 +1,124 @@
+{
+  "config": {
+    "seed": 2027,
+    "paths": 20000,
+    "steps": 30,
+    "noise_std": 0.2
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "numpy": "2.3.5",
+    "matplotlib": "3.10.8",
+    "torch": "2.14.1+cpu",
+    "cuda_available": false
+  },
+  "one_step_checks": [
+    {
+      "batch": 1,
+      "lr": 0.3,
+      "empirical_q": 0.6665276062780457,
+      "theory_q": 0.6699999999999999,
+      "mean_square_lr_limit": 0.6666666666666666
+    },
+    {
+      "batch": 1,
+      "lr": 0.65,
+      "empirical_q": 0.9537239486650481,
+      "theory_q": 0.9675,
+      "mean_square_lr_limit": 0.6666666666666666
+    },
+    {
+      "batch": 1,
+      "lr": 0.9,
+      "empirical_q": 1.6047416449168288,
+      "theory_q": 1.6300000000000001,
+      "mean_square_lr_limit": 0.6666666666666666
+    },
+    {
+      "batch": 1,
+      "lr": 1.5,
+      "empirical_q": 4.683167451665867,
+      "theory_q": 4.75,
+      "mean_square_lr_limit": 0.6666666666666666
+    },
+    {
+      "batch": 1,
+      "lr": 1.8,
+      "empirical_q": 7.0249597680817315,
+      "theory_q": 7.120000000000001,
+      "mean_square_lr_limit": 0.6666666666666666
+    },
+    {
+      "batch": 4,
+      "lr": 0.3,
+      "empirical_q": 0.5349099590046243,
+      "theory_q": 0.5349999999999999,
+      "mean_square_lr_limit": 1.3333333333333333
+    },
+    {
+      "batch": 4,
+      "lr": 0.65,
+      "empirical_q": 0.33315736929371315,
+      "theory_q": 0.33375,
+      "mean_square_lr_limit": 1.3333333333333333
+    },
+    {
+      "batch": 4,
+      "lr": 0.9,
+      "empirical_q": 0.4137862611158276,
+      "theory_q": 0.41500000000000004,
+      "mean_square_lr_limit": 1.3333333333333333
+    },
+    {
+      "batch": 4,
+      "lr": 1.5,
+      "empirical_q": 1.371404408696304,
+      "theory_q": 1.375,
+      "mean_square_lr_limit": 1.3333333333333333
+    },
+    {
+      "batch": 4,
+      "lr": 1.8,
+      "empirical_q": 2.2547416745375197,
+      "theory_q": 2.2600000000000002,
+      "mean_square_lr_limit": 1.3333333333333333
+    },
+    {
+      "batch": 16,
+      "lr": 0.3,
+      "empirical_q": 0.5010050785518262,
+      "theory_q": 0.50125,
+      "mean_square_lr_limit": 1.7777777777777777
+    },
+    {
+      "batch": 16,
+      "lr": 0.65,
+      "empirical_q": 0.1751695732245173,
+      "theory_q": 0.17531249999999998,
+      "mean_square_lr_limit": 1.7777777777777777
+    },
+    {
+      "batch": 16,
+      "lr": 0.9,
+      "empirical_q": 0.11143557691087494,
+      "theory_q": 0.11125,
+      "mean_square_lr_limit": 1.7777777777777777
+    },
+    {
+      "batch": 16,
+      "lr": 1.5,
+      "empirical_q": 0.5330931969437852,
+      "theory_q": 0.53125,
+      "mean_square_lr_limit": 1.7777777777777777
+    },
+    {
+      "batch": 16,
+      "lr": 1.8,
+      "empirical_q": 1.0481321775879386,
+      "theory_q": 1.0450000000000002,
+      "mean_square_lr_limit": 1.7777777777777777
+    }
+  ],
+  "interpretation": "Finite Monte Carlo can miss rare paths that dominate a growing second moment. The analytic curve is an expectation, not a guarantee for every trajectory."
+}

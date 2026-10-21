@@ -1,0 +1,20 @@
+[
+  {
+    "notebook": "01_sgd_moments.ipynb",
+    "status": "passed",
+    "code_cells": 7,
+    "seconds": 4.929098521999549
+  },
+  {
+    "notebook": "02_optimizer_geometry.ipynb",
+    "status": "passed",
+    "code_cells": 8,
+    "seconds": 6.3628941850038245
+  },
+  {
+    "notebook": "03_width_transfer.ipynb",
+    "status": "passed",
+    "code_cells": 9,
+    "seconds": 6.989521423995029
+  }
+]

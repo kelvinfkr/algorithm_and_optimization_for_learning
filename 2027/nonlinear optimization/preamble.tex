@@ -1,0 +1,107 @@
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{Latin Modern Roman}
+\setsansfont{Latin Modern Sans}
+\setmonofont{Latin Modern Mono}[Scale=MatchLowercase]
+\setCJKmainfont{FandolSong-Regular.otf}[BoldFont=FandolSong-Bold.otf,ItalicFont=FandolKai-Regular.otf]
+\setCJKsansfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]
+\setCJKmonofont{FandolFang-Regular.otf}
+\usepackage[a4paper,inner=23mm,outer=23mm,top=24mm,bottom=24mm,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,mathtools}
+\usepackage{graphicx,booktabs,tabularx,array,longtable}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{xcolor}
+\definecolor{CourseNavy}{HTML}{17324D}
+\definecolor{CourseTeal}{HTML}{147D85}
+\definecolor{CoursePale}{HTML}{F0F6F8}
+\definecolor{CourseGray}{HTML}{536171}
+\usepackage{titlesec}
+\usepackage{setspace}
+\setstretch{1.20}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlength{\emergencystretch}{2em}
+\setlist{nosep,leftmargin=2em,topsep=0.4em}
+\setlist[enumerate,1]{label=\arabic*.}
+\usepackage[most]{tcolorbox}
+\newtcolorbox{coursebox}[1]{enhanced,breakable,colback=CoursePale,colframe=CourseTeal,
+  boxrule=0.45pt,arc=1mm,left=3mm,right=3mm,top=2mm,bottom=2mm,
+  title={#1},fonttitle=\bfseries\sffamily,coltitle=white,
+  before skip=1em,after skip=1em}
+\titleformat{\chapter}[display]{\sffamily\bfseries\color{CourseNavy}\huge}
+  {\large 第\thechapter 讲}{0.6em}{}
+\titlespacing*{\chapter}{0pt}{-10pt}{20pt}
+\titleformat{\section}{\Large\sffamily\bfseries\color{CourseNavy}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\sffamily\bfseries\color{CourseTeal}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\sffamily\bfseries}{\thesubsubsection}{0.6em}{}
+\setcounter{secnumdepth}{2}
+\setcounter{tocdepth}{1}
+\theoremstyle{definition}
+\newtheorem{definition}{定义}[chapter]
+\newtheorem{example}{例题}[chapter]
+\newtheorem{exercise}{习题}[chapter]
+\theoremstyle{plain}
+\newtheorem{theorem}{定理}[chapter]
+\newtheorem{proposition}[theorem]{命题}
+\newtheorem{lemma}[theorem]{引理}
+\newtheorem{corollary}[theorem]{推论}
+\theoremstyle{remark}
+\newtheorem{remark}{说明}[chapter]
+\renewcommand{\proofname}{证明}
+\newcommand{\R}{\mathbb R}
+\newcommand{\E}{\mathbb E}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\Cov}{Cov}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\tr}{tr}
+\DeclareMathOperator{\rank}{rank}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\inner}[2]{\left\langle#1,#2\right\rangle}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{url}
+\usepackage[unicode,colorlinks=true,linkcolor=CourseNavy,citecolor=CourseTeal,urlcolor=CourseTeal,
+  bookmarksnumbered=true,pdfauthor={冯恺睿},pdftitle={凸优化与非线性优化：2027讲义}]{hyperref}
+\usepackage{bookmark}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily\color{CourseGray}凸优化与非线性优化}
+\fancyhead[R]{\small\sffamily\color{CourseGray}2027 讲义}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\small\thepage}\renewcommand{\headrulewidth}{0pt}}
+\renewcommand{\contentsname}{目录}
+\renewcommand{\bibname}{参考文献}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+\newcommand{\coursecover}[3]{%
+  \hypersetup{pageanchor=false}
+  \begin{titlepage}
+  \setlength{\parindent}{0pt}
+  \thispagestyle{empty}
+  \vspace*{15mm}
+  {\sffamily\color{CourseTeal}\Large 2027 \quad COURSE NOTES\par}
+  \vspace{12mm}
+  {\sffamily\bfseries\color{CourseNavy}\fontsize{31}{42}\selectfont 凸优化与\\非线性优化\par}
+  \vspace{7mm}
+  {\sffamily\color{CourseGray}\Large Convex and Nonlinear Optimization\par}
+  \vspace{13mm}
+  {\color{CourseTeal}\rule{\textwidth}{1.1pt}\par}
+  \vspace{8mm}
+  {\sffamily\bfseries\color{CourseNavy}\LARGE #1\par}
+  \vspace{6mm}
+  {\large #2\par}
+  \vspace{12mm}
+  {\normalsize #3\par}
+  \vfill
+  {\large 主讲：冯恺睿\par}
+  \vspace{3mm}
+  {\small 同济大学／上海创智学院课程材料\par}
+  \vspace{5mm}
+  {\small\color{CourseGray}从最优性条件、下降方法与随机噪声，到神经网络的更新几何与参数化。\par}
+  \end{titlepage}
+  \hypersetup{pageanchor=true}
+}

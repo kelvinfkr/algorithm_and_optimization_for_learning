@@ -1,0 +1,160 @@
+{
+  "config": {
+    "seed": 2029,
+    "steps": 200,
+    "batch": 64,
+    "width": 32,
+    "device": "cpu",
+    "polar_method": "ns",
+    "ns_steps": 5,
+    "weight_decay": 0.0
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "numpy": "2.3.5",
+    "matplotlib": "3.10.8",
+    "torch": "2.14.1+cpu",
+    "cuda_available": false
+  },
+  "actual_device": "cpu",
+  "candidates": [
+    {
+      "id": "SGD+momentum:lr=0.01",
+      "optimizer": "SGD+momentum",
+      "lr": 0.01,
+      "status": "completed",
+      "aux_lr": null,
+      "validation_loss": 0.07710965318117055,
+      "seconds": 0.14319459100079257
+    },
+    {
+      "id": "SGD+momentum:lr=0.03",
+      "optimizer": "SGD+momentum",
+      "lr": 0.03,
+      "status": "completed",
+      "aux_lr": null,
+      "validation_loss": 0.06822493133588585,
+      "seconds": 0.13927832699846476
+    },
+    {
+      "id": "SGD+momentum:lr=0.1",
+      "optimizer": "SGD+momentum",
+      "lr": 0.1,
+      "status": "completed",
+      "aux_lr": null,
+      "validation_loss": 0.06335832951137772,
+      "seconds": 0.13763694699446205
+    },
+    {
+      "id": "AdamW:lr=0.001",
+      "optimizer": "AdamW",
+      "lr": 0.001,
+      "status": "completed",
+      "aux_lr": null,
+      "validation_loss": 0.08342477675875296,
+      "seconds": 0.16961518800235353
+    },
+    {
+      "id": "AdamW:lr=0.003",
+      "optimizer": "AdamW",
+      "lr": 0.003,
+      "status": "completed",
+      "aux_lr": null,
+      "validation_loss": 0.08168306050776429,
+      "seconds": 0.1436294290033402
+    },
+    {
+      "id": "AdamW:lr=0.01",
+      "optimizer": "AdamW",
+      "lr": 0.01,
+      "status": "completed",
+      "aux_lr": null,
+      "validation_loss": 0.054850068947321494,
+      "seconds": 0.17044550699938554
+    },
+    {
+      "id": "Muon+AdamW:lr=0.01",
+      "optimizer": "Muon+AdamW",
+      "lr": 0.01,
+      "status": "completed",
+      "aux_lr": 0.001,
+      "validation_loss": 0.07101610574898222,
+      "seconds": 0.21883978399273474
+    },
+    {
+      "id": "Muon+AdamW:lr=0.03",
+      "optimizer": "Muon+AdamW",
+      "lr": 0.03,
+      "status": "completed",
+      "aux_lr": 0.003,
+      "validation_loss": 0.056721632174642704,
+      "seconds": 0.2252548740070779
+    },
+    {
+      "id": "Muon+AdamW:lr=0.1",
+      "optimizer": "Muon+AdamW",
+      "lr": 0.1,
+      "status": "completed",
+      "aux_lr": 0.01,
+      "validation_loss": 0.0882817148788971,
+      "seconds": 0.2224330099998042
+    }
+  ],
+  "selected": {
+    "SGD+momentum": {
+      "candidate": "SGD+momentum:lr=0.1",
+      "validation_loss": 0.06335832951137772,
+      "test_loss": 0.07793634921522002
+    },
+    "AdamW": {
+      "candidate": "AdamW:lr=0.01",
+      "validation_loss": 0.054850068947321494,
+      "test_loss": 0.07088998610338738
+    },
+    "Muon+AdamW": {
+      "candidate": "Muon+AdamW:lr=0.03",
+      "validation_loss": 0.056721632174642704,
+      "test_loss": 0.06653869384905363
+    }
+  },
+  "polar_example": {
+    "gradient": [
+      1.0,
+      0.4,
+      0.1,
+      0.01
+    ],
+    "exact_polar": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ns_1": [
+      0.9916562682634593,
+      0.5293942549596571,
+      0.13827408818876577,
+      0.013866517280238995
+    ],
+    "ns_3": [
+      0.9999999837339948,
+      0.8933094010871864,
+      0.304757285025874,
+      0.03119316574143587
+    ],
+    "ns_5": [
+      0.9999999999999999,
+      0.9995954844579058,
+      0.6210109003550415,
+      0.07011069126333483
+    ],
+    "ns_10": [
+      1.0,
+      1.0,
+      0.9999999993958257,
+      0.4953736624636819
+    ]
+  },
+  "protocol": "Common initialization, train/validation/test split and minibatch index stream. Three LR configurations per method, final validation-loss selection, one final test evaluation. Default weight decay is zero; positive SGD weight decay is coupled L2, unlike AdamW/Muon. Timing includes diagnostics and evaluation; this is not a hardware performance benchmark."
+}

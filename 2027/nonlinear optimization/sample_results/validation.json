@@ -1,0 +1,113 @@
+{
+  "validated_at_utc": "2026-10-21T08:12:00.593664+00:00",
+  "pdfs": {
+    "course_notes.pdf": {
+      "pages": 83,
+      "bytes": 1187887
+    },
+    "lecture01_convex.pdf": {
+      "pages": 16,
+      "bytes": 472605
+    },
+    "lecture02_kkt.pdf": {
+      "pages": 17,
+      "bytes": 476892
+    },
+    "lecture03_stochastic.pdf": {
+      "pages": 16,
+      "bytes": 483801
+    },
+    "lecture04_optimizers.pdf": {
+      "pages": 18,
+      "bytes": 515759
+    },
+    "lecture05_parameterization.pdf": {
+      "pages": 24,
+      "bytes": 602244
+    }
+  },
+  "chapters": [
+    {
+      "source": "chapters/lecture01.tex",
+      "examples": 5,
+      "exercises": 7
+    },
+    {
+      "source": "chapters/lecture02.tex",
+      "examples": 5,
+      "exercises": 7
+    },
+    {
+      "source": "chapters/lecture03.tex",
+      "examples": 4,
+      "exercises": 6
+    },
+    {
+      "source": "chapters/lecture04.tex",
+      "examples": 7,
+      "exercises": 6
+    },
+    {
+      "source": "chapters/lecture05.tex",
+      "examples": 4,
+      "exercises": 6
+    }
+  ],
+  "example_total": 25,
+  "exercise_total": 32,
+  "math_checks": "passed",
+  "notebooks": [
+    {
+      "notebook": "01_sgd_moments.ipynb",
+      "status": "passed",
+      "code_cells": 7,
+      "seconds": 4.929098521999549
+    },
+    {
+      "notebook": "02_optimizer_geometry.ipynb",
+      "status": "passed",
+      "code_cells": 8,
+      "seconds": 6.3628941850038245
+    },
+    {
+      "notebook": "03_width_transfer.ipynb",
+      "status": "passed",
+      "code_cells": 9,
+      "seconds": 6.989521423995029
+    }
+  ],
+  "cpu_training_runs": {
+    "lab02": 27,
+    "lab03": 108,
+    "seeds": [
+      2027,
+      2028,
+      2029
+    ]
+  },
+  "failure_path_check": {
+    "declared": 12,
+    "failed_retained": 6,
+    "usable_selections": 6
+  },
+  "pdf_qa": {
+    "combined_pages_rendered_and_inspected": 83,
+    "selected_detail_pages": [
+      21,
+      28,
+      43,
+      55,
+      70,
+      76
+    ]
+  },
+  "cuda_tested": false,
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.39",
+    "numpy": "2.3.5",
+    "matplotlib": "3.10.8",
+    "torch": "2.14.1+cpu",
+    "cuda_available": false
+  }
+}
